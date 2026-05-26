@@ -166,6 +166,7 @@ function App() {
     string | undefined
   >(undefined);
   const [doIt, undo, redo, canUndo, canRedo, reset] = useUndoRedo();
+  const pub = usePub();
   const [showAbout, setShowAbout] = useState(false);
   const [showLicenseNotice, setShowLicenseNotice] = useState(false);
   const [connectionAbort, setConnectionAbort] = useState(new AbortController());
@@ -211,11 +212,13 @@ function App() {
       let resp = await call_rpc(conn.conn, { keymap: { saveChanges: true } });
       if (!resp.keymap?.saveChanges || resp.keymap?.saveChanges.err) {
         console.error("Failed to save changes", resp.keymap?.saveChanges);
+      } else {
+        pub("keymap_saved", undefined);
       }
     }
 
     doSave();
-  }, [conn]);
+  }, [conn, pub]);
 
   const discard = useCallback(() => {
     async function doDiscard() {

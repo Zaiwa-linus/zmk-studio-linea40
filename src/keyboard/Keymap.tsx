@@ -19,6 +19,7 @@ export interface KeymapProps {
   scale: LayoutZoom;
   selectedLayerIndex: number;
   selectedKeyPosition: number | undefined;
+  changedKeyPositions?: Set<number>;
   onKeyPositionClicked: (keyPosition: number) => void;
 }
 
@@ -29,6 +30,7 @@ export const Keymap = ({
   scale,
   selectedLayerIndex,
   selectedKeyPosition,
+  changedKeyPositions,
   onKeyPositionClicked,
 }: KeymapProps) => {
   if (!keymap.layers[selectedLayerIndex]) {
@@ -60,6 +62,7 @@ export const Keymap = ({
       r: (k.r || 0) / 100.0,
       rx: (k.rx || 0) / 100.0,
       ry: (k.ry || 0) / 100.0,
+      changed: changedKeyPositions?.has(i) ?? false,
       children: (
         <HidUsageLabel
           hid_usage={keymap.layers[selectedLayerIndex].bindings[i].param1}

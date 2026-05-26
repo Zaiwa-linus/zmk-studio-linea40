@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { useSub } from "../usePubSub";
 
 import { Request } from "@zmkfirmware/zmk-studio-ts-client";
 import { call_rpc } from "../rpc/logging";
@@ -174,6 +175,20 @@ export default function Keyboard() {
     true
   );
 
+  const [savedKeymap, setSavedKeymap] = useState<Keymap | undefined>(undefined);
+
+  useEffect(() => {
+    if (keymap === undefined) {
+      setSavedKeymap(undefined);
+    } else {
+      setSavedKeymap((prev) => prev === undefined ? keymap : prev);
+    }
+  }, [keymap]);
+
+  useSub("keymap_saved", () => {
+    if (keymap) setSavedKeymap(keymap);
+  });
+
   const [keymapScale, setKeymapScale] = useLocalStorageState<LayoutZoom>("keymapScale", "auto", {
     deserialize: deserializeLayoutZoom,
   });
@@ -299,6 +314,52 @@ export default function Keyboard() {
 
     return keymap.layers[selectedLayerIndex].bindings[selectedKeyPosition];
   }, [keymap, selectedLayerIndex, selectedKeyPosition]);
+
+  const selectedSavedBinding = useMemo(() => {
+    if (savedKeymap == null || selectedKeyPosition == null || !savedKeymap.layers[selectedLayerIndex]) {
+      return undefined;
+    }
+    const savedLayer = savedKeymap.layers.find(
+      (l) => l.id === keymap?.layers[selectedLayerIndex]?.id
+    );
+    return savedLayer?.bindings[selectedKeyPosition];
+  }, [savedKeymap, keymap, selectedLayerIndex, selectedKeyPosition]);
+
+  const changedLayers = useMemo(() => {
+    if (!keymap || !savedKeymap) return new Set<number>();
+    const changed = new Set<number>();
+    for (let li = 0; li < keymap.layers.length; li++) {
+      const layer = keymap.layers[li];
+      const savedLayer = savedKeymap.layers.find((l) => l.id === layer.id);
+      if (!savedLayer) { changed.add(li); continue; }
+      for (let ki = 0; ki < layer.bindings.length; ki++) {
+        const b = layer.bindings[ki];
+        const s = savedLayer.bindings[ki];
+        if (!s || b.behaviorId !== s.behaviorId || b.param1 !== s.param1 || b.param2 !== s.param2) {
+          changed.add(li);
+          break;
+        }
+      }
+    }
+    return changed;
+  }, [keymap, savedKeymap]);
+
+  const changedKeys = useMemo(() => {
+    if (!keymap || !savedKeymap) return new Set<number>();
+    const layer = keymap.layers[selectedLayerIndex];
+    if (!layer) return new Set<number>();
+    const savedLayer = savedKeymap.layers.find((l) => l.id === layer.id);
+    if (!savedLayer) return new Set<number>(layer.bindings.map((_, i) => i));
+    const changed = new Set<number>();
+    for (let ki = 0; ki < layer.bindings.length; ki++) {
+      const b = layer.bindings[ki];
+      const s = savedLayer.bindings[ki];
+      if (!s || b.behaviorId !== s.behaviorId || b.param1 !== s.param1 || b.param2 !== s.param2) {
+        changed.add(ki);
+      }
+    }
+    return changed;
+  }, [keymap, savedKeymap, selectedLayerIndex]);
 
   const moveLayer = useCallback(
     (start: number, end: number) => {
@@ -521,6 +582,7 @@ export default function Keyboard() {
             <LayerPicker
               layers={keymap.layers}
               selectedLayerIndex={selectedLayerIndex}
+              changedLayerIndices={changedLayers}
               onLayerClicked={setSelectedLayerIndex}
               onLayerMoved={moveLayer}
               canAdd={(keymap.availableLayers || 0) > 0}
@@ -541,6 +603,7 @@ export default function Keyboard() {
             scale={keymapScale}
             selectedLayerIndex={selectedLayerIndex}
             selectedKeyPosition={selectedKeyPosition}
+            changedKeyPositions={changedKeys}
             onKeyPositionClicked={setSelectedKeyPosition}
           />
           <select
@@ -571,7 +634,9 @@ export default function Keyboard() {
               id,
               name: name || li.toLocaleString(),
             }))}
+            savedBinding={selectedSavedBinding}
             onBindingChanged={doUpdateBinding}
+            onRevert={() => selectedSavedBinding && doUpdateBinding(selectedSavedBinding)}
           />
         </div>
       )}

@@ -17,6 +17,7 @@ export type KeyPosition = PropsWithChildren<{
   r?: number;
   rx?: number;
   ry?: number;
+  changed?: boolean;
 }>;
 
 export type LayoutZoom = number | "auto";
@@ -134,6 +135,7 @@ export const PhysicalLayout = ({
         <Key
           oneU={oneU}
           selected={idx === selectedPosition}
+          changed={p.changed}
           {...p}
         />
       </div>

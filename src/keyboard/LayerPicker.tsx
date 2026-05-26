@@ -24,6 +24,7 @@ interface LayerPickerProps {
   selectedLayerIndex: number;
   canAdd?: boolean;
   canRemove?: boolean;
+  changedLayerIndices?: Set<number>;
 
   onLayerClicked?: LayerClickCallback;
   onLayerMoved?: LayerMovedCallback;
@@ -107,6 +108,7 @@ export const LayerPicker = ({
   selectedLayerIndex,
   canAdd,
   canRemove,
+  changedLayerIndices,
   onLayerClicked,
   onLayerMoved,
   onAddClicked,
@@ -218,7 +220,12 @@ export const LayerPicker = ({
             textValue={layer_item.name}
             className="p-1 b-1 my-1 group grid grid-cols-[1fr_auto] items-center aria-selected:bg-primary aria-selected:text-primary-content border rounded border-transparent border-solid hover:bg-base-300"
           >
-            <span>{layer_item.name}</span>
+            <span className="flex items-center gap-1">
+              {layer_item.name}
+              {changedLayerIndices?.has(layer_item.index) && (
+                <span className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0 inline-block" />
+              )}
+            </span>
             <Pencil
               className="h-4 w-4 mx-1 invisible group-hover:visible"
               onClick={() =>
