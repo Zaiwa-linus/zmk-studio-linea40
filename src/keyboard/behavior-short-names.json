@@ -1,5 +1,5 @@
 {
-    "Key Press": {"short": ""},
+    "Key Press": {"short": "kp"},
     "Bootloader": {"short": "Bootloadr"},
     "External Power": {"short": "Ext Pwr"},
     "Grave/Escape": {"short": "Grv/Esc"},

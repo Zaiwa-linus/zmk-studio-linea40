@@ -8,43 +8,60 @@ export interface ParameterValuePickerProps {
   onValueChanged: (value?: number) => void;
 }
 
+const BTN =
+  "px-3 py-1.5 text-sm rounded border transition-colors text-center leading-none";
+const BTN_OFF =
+  "bg-base-100 text-base-content border-base-300 hover:border-primary hover:bg-base-200";
+const BTN_ON =
+  "bg-primary text-primary-content border-primary shadow";
+
 export const ParameterValuePicker = ({
   value,
   values,
   layers,
   onValueChanged,
 }: ParameterValuePickerProps) => {
-  if (values.length == 0) {
+  if (values.length === 0) {
     return <></>;
-  } else if (values.every((v) => v.constant !== undefined)) {
+  }
+
+  // All constants → button grid
+  if (values.every((v) => v.constant !== undefined)) {
     return (
-      <div>
-        <select
-          value={value}
-          className="h-8 rounded"
-          onChange={(e) => onValueChanged(parseInt(e.target.value))}
-        >
-          {values.map((v) => (
-            <option value={v.constant}>{v.name}</option>
-          ))}
-        </select>
+      <div className="flex flex-wrap gap-1.5">
+        {values.map((v) => (
+          <button
+            key={v.constant}
+            className={`${BTN} ${value === v.constant ? BTN_ON : BTN_OFF}`}
+            onClick={() => onValueChanged(v.constant)}
+          >
+            {v.name}
+          </button>
+        ))}
       </div>
     );
-  } else if (values.length == 1) {
+  }
+
+  if (values.length === 1) {
+    // Range → number input
     if (values[0].range) {
       return (
-        <div>
-          <label>{values[0].name}: </label>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-base-content/70">{values[0].name}</label>
           <input
             type="number"
             min={values[0].range.min}
             max={values[0].range.max}
-            value={value}
+            value={value ?? ""}
+            className="w-24 px-2 py-1 text-sm rounded border border-base-300 bg-base-100"
             onChange={(e) => onValueChanged(parseInt(e.target.value))}
           />
         </div>
       );
-    } else if (values[0].hidUsage) {
+    }
+
+    // HID Usage → grid picker (defined in HidUsagePicker)
+    if (values[0].hidUsage) {
       return (
         <HidUsagePicker
           onValueChanged={onValueChanged}
@@ -56,29 +73,24 @@ export const ParameterValuePicker = ({
           ]}
         />
       );
-    } else if (values[0].layerId) {
+    }
+
+    // Layer ID → button per layer
+    if (values[0].layerId) {
       return (
-        <div>
-          <label>{values[0].name}: </label>
-          <select
-            value={value}
-            className="h-8 rounded"
-            onChange={(e) => onValueChanged(parseInt(e.target.value))}
-          >
-            {layers.map(({ name, id }) => (
-              <option value={id}>{name}</option>
-            ))}
-          </select>
+        <div className="flex flex-wrap gap-1.5">
+          {layers.map(({ name, id }) => (
+            <button
+              key={id}
+              className={`${BTN} ${value === id ? BTN_ON : BTN_OFF}`}
+              onClick={() => onValueChanged(id)}
+            >
+              {name}
+            </button>
+          ))}
         </div>
       );
     }
-  } else {
-    console.log("Not sure how to handle", values);
-    return (
-      <>
-        <p>Some composite?</p>
-      </>
-    );
   }
 
   return <></>;

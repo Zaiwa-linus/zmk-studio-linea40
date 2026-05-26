@@ -48,7 +48,7 @@ export const Key = ({
 
   return (
     <button
-      className={`group rounded relative flex justify-center items-center cursor-pointer transition-all hover:shadow-xl hover:ring-1 hover:ring-gray-300 hover:scale-125 ${selected ? "bg-primary text-primary-content" : "bg-base-100 text-base-content"
+      className={`group rounded flex flex-col cursor-pointer transition-all hover:shadow-xl hover:ring-1 hover:ring-gray-300 hover:scale-105 ${selected ? "bg-primary text-primary-content" : "bg-base-100 text-base-content"
         }`}
       style={{
         width: `${pixelWidth}px`,
@@ -56,8 +56,12 @@ export const Key = ({
       }}
       onClick={onClick}
     >
-      <div className={`absolute text-xs ${selected ? "text-primary-content" : "z1text-base-content"} opacity-80 top-1 text-nowrap left-1/2 font-light -translate-x-1/2 text-center`}>{shortenHeader(header)}</div>
-      {children}
+      <div className={`text-[9px] font-light opacity-70 w-full px-0.5 pt-0.5 leading-none truncate text-center ${selected ? "text-primary-content" : "text-base-content"}`}>
+        {shortenHeader(header)}
+      </div>
+      <div className="flex-1 flex items-center justify-center w-full overflow-hidden px-0.5 text-[11px] leading-none truncate">
+        {children}
+      </div>
     </button>
   );
 };

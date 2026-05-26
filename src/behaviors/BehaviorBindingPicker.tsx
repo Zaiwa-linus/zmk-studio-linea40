@@ -39,6 +39,44 @@ function validateBinding(
   return validateValue(layerIds, param2, matchingSet.param2);
 }
 
+const BEHAVIOR_PRIORITY: string[] = [
+  "Key Press",
+  "Mod Tap",
+  "Layer Tap",
+  "Momentary Layer",
+  "Toggle Layer",
+  "Sticky Key",
+  "Bluetooth",
+  "Output Selection",
+  "Transparent",
+  "None",
+  "Studio Unlock",
+  "Bootloader",
+  "External Power",
+  "Grave/Escape",
+  "Key Repeat",
+  "Key Toggle",
+];
+
+const BEHAVIOR_DESCRIPTIONS: Record<string, string> = {
+  "Key Press": "キーコードを送信します",
+  "Mod Tap": "ホールド: modifier / タップ: キーコードを送信",
+  "Layer Tap": "ホールド: レイヤー有効化 / タップ: キーコードを送信",
+  "Momentary Layer": "押している間、指定レイヤーを有効化",
+  "Toggle Layer": "レイヤーのオン/オフを切り替え",
+  "Sticky Key": "次のキー入力に modifier を付与",
+  "Bluetooth": "Bluetooth 接続を制御",
+  "Output Selection": "USB / BLE 出力先を切り替え",
+  "Transparent": "下位レイヤーの binding をそのまま使用",
+  "None": "何もしません",
+  "Studio Unlock": "ZMK Studio のロックを解除",
+  "Bootloader": "ブートローダーモードに入ります",
+  "External Power": "外部電源を制御",
+  "Grave/Escape": "Shift/GUI なし: Grave、あり: Escape",
+  "Key Repeat": "直前のキーコードを繰り返し送信",
+  "Key Toggle": "キーコードのトグル",
+};
+
 export const BehaviorBindingPicker = ({
   binding,
   layers,
@@ -54,8 +92,21 @@ export const BehaviorBindingPicker = ({
     [behaviorId, behaviors]
   );
 
-  const sortedBehaviors = useMemo(
-    () => behaviors.sort((a, b) => a.displayName.localeCompare(b.displayName)),
+  const selectedBehavior = useMemo(
+    () => behaviors.find((b) => b.id === behaviorId),
+    [behaviors, behaviorId]
+  );
+
+  const orderedBehaviors = useMemo(
+    () =>
+      [...behaviors].sort((a, b) => {
+        const ai = BEHAVIOR_PRIORITY.indexOf(a.displayName);
+        const bi = BEHAVIOR_PRIORITY.indexOf(b.displayName);
+        if (ai === -1 && bi === -1) return a.displayName.localeCompare(b.displayName);
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      }),
     [behaviors]
   );
 
@@ -99,35 +150,63 @@ export const BehaviorBindingPicker = ({
   }, [binding]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <label>Behavior: </label>
-        <select
-          value={behaviorId}
-          className="h-8 rounded"
-          onChange={(e) => {
-            setBehaviorId(parseInt(e.target.value));
-            setParam1(0);
-            setParam2(0);
-          }}
-        >
-          {sortedBehaviors.map((b) => (
-            <option key={b.id} value={b.id}>
+    <div className="flex h-full overflow-hidden divide-x divide-base-300">
+      {/* Left pane: behavior list */}
+      <div className="w-48 shrink-0 flex flex-col overflow-hidden">
+        <div className="px-3 py-2 text-base font-semibold text-base-content shrink-0 border-b border-base-300">
+          Behavior
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {orderedBehaviors.map((b) => (
+            <label
+              key={b.id}
+              className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${
+                behaviorId === b.id
+                  ? "bg-primary text-primary-content"
+                  : "hover:bg-base-100 text-base-content"
+              }`}
+            >
+              <input
+                type="radio"
+                name="behavior-picker"
+                value={b.id}
+                checked={behaviorId === b.id}
+                onChange={() => {
+                  setBehaviorId(b.id);
+                  setParam1(0);
+                  setParam2(0);
+                }}
+                className="shrink-0 accent-primary"
+              />
               {b.displayName}
-            </option>
+            </label>
           ))}
-        </select>
+        </div>
       </div>
-      {metadata && (
-        <BehaviorParametersPicker
-          metadata={metadata}
-          param1={param1}
-          param2={param2}
-          layers={layers}
-          onParam1Changed={setParam1}
-          onParam2Changed={setParam2}
-        />
-      )}
+
+      {/* Right pane: header + parameters */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-base-300 shrink-0">
+          <div className="font-semibold text-base">{selectedBehavior?.displayName ?? "—"}</div>
+          {selectedBehavior && (
+            <div className="text-sm text-base-content/50 mt-0.5">
+              {BEHAVIOR_DESCRIPTIONS[selectedBehavior.displayName] ?? ""}
+            </div>
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto p-3">
+          {metadata && (
+            <BehaviorParametersPicker
+              metadata={metadata}
+              param1={param1}
+              param2={param2}
+              layers={layers}
+              onParam1Changed={setParam1}
+              onParam2Changed={setParam2}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 };
