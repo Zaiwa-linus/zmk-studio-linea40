@@ -7,7 +7,7 @@ import {
 } from "react-aria-components";
 import { useConnectedDeviceData } from "./rpc/useConnectedDeviceData";
 import { useSub } from "./usePubSub";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { useModalRef } from "./misc/useModalRef";
 import { LockStateContext } from "./rpc/LockStateContext";
 import { LockState } from "@zmkfirmware/zmk-studio-ts-client/core";
@@ -15,6 +15,11 @@ import { ConnectionContext } from "./rpc/ConnectionContext";
 import { ChevronDown, Undo2, Redo2, Save, Trash2 } from "lucide-react";
 import { Tooltip } from "./misc/Tooltip";
 import { GenericModal } from "./GenericModal";
+import { CustomRpcContext } from "./rpc/CustomRpcContext";
+import {
+  findCormoranRipIndex,
+  getCurrentCpi,
+} from "./rpc/ripRpc";
 
 export interface AppHeaderProps {
   connectedDeviceLabel?: string;
@@ -43,6 +48,48 @@ export const AppHeader = ({
 
   const lockState = useContext(LockStateContext);
   const connectionState = useContext(ConnectionContext);
+  const customChannel = useContext(CustomRpcContext);
+
+  const [currentCpi, setCurrentCpi] = useState<number | null>(null);
+  const subsystemIndexRef = useRef<number | null>(null);
+
+  // Poll current sensor CPI while connected and unlocked.
+  useEffect(() => {
+    if (!customChannel || lockState !== LockState.ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED) {
+      setCurrentCpi(null);
+      subsystemIndexRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const fetchCurrentCpi = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        if (subsystemIndexRef.current === null) {
+          subsystemIndexRef.current = await findCormoranRipIndex(customChannel);
+        }
+        const idx = subsystemIndexRef.current;
+        if (idx === null || cancelled) return;
+        const cpi = await getCurrentCpi(customChannel, idx);
+        if (!cancelled) setCurrentCpi(cpi && cpi > 0 ? cpi : null);
+      } catch (e) {
+        console.error("Failed to fetch current CPI", e);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    fetchCurrentCpi();
+    const intervalId = window.setInterval(fetchCurrentCpi, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [customChannel, lockState]);
 
   useEffect(() => {
     if (
@@ -66,9 +113,16 @@ export const AppHeader = ({
 
   return (
     <header className="top-0 left-0 right-0 grid grid-cols-[1fr_auto_1fr] items-center justify-between h-10 max-w-full">
-      <div className="flex px-3 items-center gap-1">
+      <div className="flex px-3 items-center gap-2">
         <img src="/zmk.svg" alt="ZMK Logo" className="h-8 rounded" />
         <p>Studio</p>
+        {currentCpi !== null && (
+          <Tooltip label="Current sensor CPI">
+            <span className="text-xs text-base-content/60 tabular-nums">
+              {currentCpi} DPI
+            </span>
+          </Tooltip>
+        )}
       </div>
       <GenericModal ref={showSettingsRef} className="max-w-[50vw]">
         <h2 className="my-2 text-lg">Restore Stock Settings</h2>

@@ -2,6 +2,8 @@ import { AppHeader } from "./AppHeader";
 
 import { create_rpc_connection } from "@zmkfirmware/zmk-studio-ts-client";
 import { call_rpc } from "./rpc/logging";
+import { interceptTransport, type CustomRpcChannel } from "./rpc/customRpcChannel";
+import { CustomRpcContext } from "./rpc/CustomRpcContext";
 
 import type { Notification } from "@zmkfirmware/zmk-studio-ts-client/studio";
 import { ConnectionState, ConnectionContext } from "./rpc/ConnectionContext";
@@ -126,9 +128,12 @@ async function connect(
   transport: RpcTransport,
   setConn: Dispatch<ConnectionState>,
   setConnectedDeviceName: Dispatch<string | undefined>,
+  setCustomChannel: Dispatch<CustomRpcChannel | null>,
   signal: AbortSignal
 ) {
-  let conn = await create_rpc_connection(transport, { signal });
+  const { proxyTransport, customChannel } = interceptTransport(transport);
+  setCustomChannel(customChannel);
+  let conn = await create_rpc_connection(proxyTransport, { signal });
 
   let details = await Promise.race([
     call_rpc(conn, { core: { getDeviceInfo: true } })
@@ -165,6 +170,7 @@ function App() {
   const [connectedDeviceName, setConnectedDeviceName] = useState<
     string | undefined
   >(undefined);
+  const [customChannel, setCustomChannel] = useState<CustomRpcChannel | null>(null);
   const [doIt, undo, redo, canUndo, canRedo, reset] = useUndoRedo();
   const pub = usePub();
   const [showAbout, setShowAbout] = useState(false);
@@ -278,12 +284,13 @@ function App() {
     (t: RpcTransport) => {
       const ac = new AbortController();
       setConnectionAbort(ac);
-      connect(t, setConn, setConnectedDeviceName, ac.signal);
+      connect(t, setConn, setConnectedDeviceName, setCustomChannel, ac.signal);
     },
-    [setConn, setConnectedDeviceName, setConnectedDeviceName]
+    [setConn, setConnectedDeviceName, setCustomChannel]
   );
 
   return (
+    <CustomRpcContext.Provider value={customChannel}>
     <ConnectionContext.Provider value={conn}>
       <LockStateContext.Provider value={lockState}>
         <UndoRedoContext.Provider value={doIt}>
@@ -319,6 +326,7 @@ function App() {
         </UndoRedoContext.Provider>
       </LockStateContext.Provider>
     </ConnectionContext.Provider>
+    </CustomRpcContext.Provider>
   );
 }
 
