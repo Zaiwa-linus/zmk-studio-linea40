@@ -86,9 +86,13 @@ interface EncoderPresetDefinition {
 
 const LINEA40_ENCODER_PRESET_DEFINITIONS: EncoderPresetDefinition[] = [
   { behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"], param1: 65386, param2: 150 },
+  { behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"], param1: 150, param2: 65386 },
   { behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"], param1: 786666, param2: 786665 },
+  { behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"], param1: 786665, param2: 786666 },
   { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458833, param2: 458834 },
+  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458834, param2: 458833 },
   { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458831, param2: 458832 },
+  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458832, param2: 458831 },
 ];
 
 function normalizeBehaviorName(name: string): string {
