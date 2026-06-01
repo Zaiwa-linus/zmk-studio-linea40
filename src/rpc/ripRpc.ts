@@ -19,9 +19,28 @@ import type { CustomRpcChannel } from "./customRpcChannel";
  *   cormoran.rip.Request.get_current_cpi=20
  *   cormoran.rip.Response.get_current_cpi=21
  *   cormoran.rip.GetCurrentCpiResponse.cpi=1
+ *   cormoran.rip.Request.get_encoder_bindings=21 (empty)
+ *   cormoran.rip.Request.set_encoder_binding=22
+ *   cormoran.rip.Response.get_encoder_bindings=22
+ *   cormoran.rip.Response.set_encoder_binding=23
+ *   cormoran.rip.EncoderBinding: behavior_id=1, param1=2, param2=3
+ *   cormoran.rip.EncoderLayerBindings: layer_id=1, binding=2
+ *   cormoran.rip.GetEncoderBindingsResponse: layers=1 (repeated EncoderLayerBindings)
+ *   cormoran.rip.SetEncoderBindingRequest: layer_id=1, binding=2
  */
 
 import { readVarint } from "./customRpcChannel";
+
+export interface EncoderBinding {
+  behaviorId: number;
+  param1: number;
+  param2: number;
+}
+
+export interface EncoderLayerBinding {
+  layerId: number;
+  binding: EncoderBinding;
+}
 
 export interface InputProcessorInfo {
   id: number;
@@ -102,6 +121,43 @@ export function encodeGetInputProcessorRequest(
   // zmk.custom.Request { call: callReq }
   const customReq = fieldBytes(2, callReq);
 
+  return wrapStudioRequest(requestId, customReq);
+}
+
+export function encodeGetEncoderBindingsRequest(
+  requestId: number,
+  subsystemIndex: number,
+): Uint8Array {
+  // cormoran.rip.Request { get_encoder_bindings: {} } = field 21, empty payload
+  const ripReq = fieldBytes(21, []);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
+  return wrapStudioRequest(requestId, customReq);
+}
+
+function encodeEncoderBinding(binding: EncoderBinding): number[] {
+  return [
+    ...fieldVarint(1, binding.behaviorId),
+    ...fieldVarint(2, binding.param1),
+    ...fieldVarint(3, binding.param2),
+  ];
+}
+
+export function encodeSetEncoderBindingRequest(
+  requestId: number,
+  subsystemIndex: number,
+  layerId: number,
+  binding: EncoderBinding,
+): Uint8Array {
+  // cormoran.rip.SetEncoderBindingRequest { layer_id, binding }
+  const setReqInner = [
+    ...fieldVarint(1, layerId),
+    ...fieldBytes(2, encodeEncoderBinding(binding)),
+  ];
+  // cormoran.rip.Request { set_encoder_binding: setReqInner } = field 22
+  const ripReq = fieldBytes(22, setReqInner);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
   return wrapStudioRequest(requestId, customReq);
 }
 
@@ -275,6 +331,121 @@ export function decodeGetInputProcessorResponse(
 }
 
 /**
+ * Decode a raw frame as a GetEncoderBindings response.
+ * Returns null if not a matching custom response.
+ */
+export function decodeGetEncoderBindingsResponse(
+  frame: Uint8Array,
+): { requestId: number; layers: EncoderLayerBinding[] } | null {
+  let requestResponseBytes: Uint8Array | null = null;
+  walkFields(frame, (f, w, v) => {
+    if (f === 1 && w === 2) requestResponseBytes = v as Uint8Array;
+  });
+  if (!requestResponseBytes) return null;
+
+  let requestId = 0;
+  let customBytes: Uint8Array | null = null;
+  walkFields(requestResponseBytes, (f, w, v) => {
+    if (f === 1 && w === 0) requestId = v as number;
+    if (f === 100 && w === 2) customBytes = v as Uint8Array;
+  });
+  if (!customBytes) return null;
+
+  let callResponseBytes: Uint8Array | null = null;
+  walkFields(customBytes, (f, w, v) => {
+    if (f === 2 && w === 2) callResponseBytes = v as Uint8Array;
+  });
+  if (!callResponseBytes) return null;
+
+  let ripPayload: Uint8Array | null = null;
+  walkFields(callResponseBytes, (f, w, v) => {
+    if (f === 2 && w === 2) ripPayload = v as Uint8Array;
+  });
+  if (!ripPayload) return null;
+
+  // cormoran.rip.Response.get_encoder_bindings = field 22
+  let getRespBytes: Uint8Array | null = null;
+  walkFields(ripPayload, (f, w, v) => {
+    if (f === 22 && w === 2) getRespBytes = v as Uint8Array;
+  });
+  if (!getRespBytes) return null;
+
+  const layers: EncoderLayerBinding[] = [];
+  // repeated EncoderLayerBindings layers = field 1
+  walkFields(getRespBytes, (f, w, v) => {
+    if (f !== 1 || w !== 2) return;
+    let layerId = 0;
+    let bindingBytes: Uint8Array | null = null;
+    walkFields(v as Uint8Array, (sf, sw, sv) => {
+      if (sf === 1 && sw === 0) layerId = sv as number;
+      if (sf === 2 && sw === 2) bindingBytes = sv as Uint8Array;
+    });
+    if (!bindingBytes) return;
+    let behaviorId = 0, param1 = 0, param2 = 0;
+    walkFields(bindingBytes, (sf, sw, sv) => {
+      if (sf === 1 && sw === 0) behaviorId = sv as number;
+      if (sf === 2 && sw === 0) param1 = sv as number;
+      if (sf === 3 && sw === 0) param2 = sv as number;
+    });
+    layers.push({ layerId, binding: { behaviorId, param1, param2 } });
+  });
+
+  return { requestId, layers };
+}
+
+/**
+ * Decode a raw frame as a SetEncoderBinding response (empty on success).
+ * Returns true on success, null if not matching.
+ */
+export function decodeSetEncoderBindingResponse(
+  frame: Uint8Array,
+): { requestId: number; ok: boolean } | null {
+  let requestResponseBytes: Uint8Array | null = null;
+  walkFields(frame, (f, w, v) => {
+    if (f === 1 && w === 2) requestResponseBytes = v as Uint8Array;
+  });
+  if (!requestResponseBytes) return null;
+
+  let requestId = 0;
+  let customBytes: Uint8Array | null = null;
+  walkFields(requestResponseBytes, (f, w, v) => {
+    if (f === 1 && w === 0) requestId = v as number;
+    if (f === 100 && w === 2) customBytes = v as Uint8Array;
+  });
+  if (!customBytes) return null;
+
+  let callResponseBytes: Uint8Array | null = null;
+  walkFields(customBytes, (f, w, v) => {
+    if (f === 2 && w === 2) callResponseBytes = v as Uint8Array;
+  });
+  if (!callResponseBytes) return null;
+
+  let ripPayload: Uint8Array | null = null;
+  walkFields(callResponseBytes, (f, w, v) => {
+    if (f === 2 && w === 2) ripPayload = v as Uint8Array;
+  });
+  if (!ripPayload) return null;
+  const payload = ripPayload as Uint8Array;
+
+  // cormoran.rip.Response.error = field 1
+  let hasError = false;
+  walkFields(payload, (f, w, _v) => {
+    if (f === 1 && w === 2) hasError = true;
+  });
+  if (hasError) return { requestId, ok: false };
+
+  // cormoran.rip.Response.set_encoder_binding = field 23. Some nanopb builds encode
+  // empty success messages as an empty custom payload, so matching request + no error is
+  // also accepted as success.
+  let found = false;
+  walkFields(payload, (f, w, _v) => {
+    if (f === 23 && w === 2) found = true;
+  });
+
+  return { requestId, ok: found || payload.length === 0 };
+}
+
+/**
  * Decode a raw frame as a GetCurrentCpi response.
  * Returns null if not a matching custom response.
  */
@@ -399,6 +570,59 @@ export function getInputProcessor(
       }
     }
     return null;
+  });
+}
+
+/**
+ * Fetch all encoder layer bindings from the cormoran_rip custom subsystem.
+ */
+export function getEncoderBindings(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+): Promise<EncoderLayerBinding[] | null> {
+  return channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    const encoded = encodeGetEncoderBindingsRequest(reqId, subsystemIndex);
+    console.log(`[ripRpc] sending GetEncoderBindings reqId=${reqId}`);
+    await channel.writeCustomFrame(encoded);
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const frame = await readWithTimeout(channel);
+      const resp = decodeGetEncoderBindingsResponse(frame);
+      if (resp && resp.requestId === reqId) {
+        console.log(`[ripRpc] GetEncoderBindings: ${resp.layers.length} layers`);
+        return resp.layers;
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * Set a single encoder layer binding via cormoran_rip custom RPC.
+ * Returns true on success.
+ */
+export function setEncoderBinding(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+  layerId: number,
+  binding: EncoderBinding,
+): Promise<boolean> {
+  return channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    const encoded = encodeSetEncoderBindingRequest(reqId, subsystemIndex, layerId, binding);
+    console.log(`[ripRpc] sending SetEncoderBinding reqId=${reqId} layerId=${layerId}`);
+    await channel.writeCustomFrame(encoded);
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const frame = await readWithTimeout(channel);
+      const resp = decodeSetEncoderBindingResponse(frame);
+      if (resp && resp.requestId === reqId) {
+        console.log(`[ripRpc] SetEncoderBinding: ${resp.ok ? "success" : "error"}`);
+        return resp.ok;
+      }
+    }
+    return false;
   });
 }
 

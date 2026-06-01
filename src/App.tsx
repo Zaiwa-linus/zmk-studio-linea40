@@ -174,6 +174,8 @@ function App() {
   const [doIt, undo, redo, canUndo, canRedo, reset] = useUndoRedo();
   const pub = usePub();
   const [showAbout, setShowAbout] = useState(false);
+  const [encoderUnsaved, setEncoderUnsaved] = useState(false);
+  useSub("encoder_unsaved_changed", (v: boolean) => setEncoderUnsaved(v));
   const [showLicenseNotice, setShowLicenseNotice] = useState(false);
   const [connectionAbort, setConnectionAbort] = useState(new AbortController());
 
@@ -241,10 +243,11 @@ function App() {
 
       reset();
       setConn({ conn: conn.conn });
+      pub("keymap_discarded", undefined);
     }
 
     doDiscard();
-  }, [conn]);
+  }, [conn, pub]);
 
   const resetSettings = useCallback(() => {
     async function doReset() {
@@ -316,6 +319,7 @@ function App() {
               onDiscard={discard}
               onDisconnect={disconnect}
               onResetSettings={resetSettings}
+              extraUnsaved={encoderUnsaved}
             />
             <Keyboard />
             <AppFooter

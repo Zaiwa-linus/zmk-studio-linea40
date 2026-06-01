@@ -4,9 +4,10 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { useSub } from "../usePubSub";
+import { usePub, useSub } from "../usePubSub";
 
 import { Request } from "@zmkfirmware/zmk-studio-ts-client";
 import { call_rpc } from "../rpc/logging";
@@ -23,8 +24,10 @@ import type { GetBehaviorDetailsResponse } from "@zmkfirmware/zmk-studio-ts-clie
 import { LayerPicker } from "./LayerPicker";
 import { PhysicalLayoutPicker } from "./PhysicalLayoutPicker";
 import { Keymap as KeymapComp } from "./Keymap";
+import { EncoderBindingPicker, EncoderKey } from "./EncoderBindings";
 import { useConnectedDeviceData } from "../rpc/useConnectedDeviceData";
 import { ConnectionContext } from "../rpc/ConnectionContext";
+import { CustomRpcContext } from "../rpc/CustomRpcContext";
 import { UndoRedoContext } from "../undoRedo";
 import { BehaviorBindingPicker } from "../behaviors/BehaviorBindingPicker";
 import { produce } from "immer";
@@ -32,8 +35,78 @@ import { LockStateContext } from "../rpc/LockStateContext";
 import { LockState } from "@zmkfirmware/zmk-studio-ts-client/core";
 import { deserializeLayoutZoom, LayoutZoom } from "./PhysicalLayout";
 import { useLocalStorageState } from "../misc/useLocalStorageState";
+import {
+  findCormoranRipIndex,
+  getEncoderBindings,
+  setEncoderBinding,
+  type EncoderLayerBinding,
+} from "../rpc/ripRpc";
 
 type BehaviorMap = Record<number, GetBehaviorDetailsResponse>;
+
+const KEY_ONLY_BEHAVIOR_NAMES = new Set([
+  "Key Press",
+  "Mod Tap",
+  "Mod-Tap",
+  "Layer Tap",
+  "Layer-Tap",
+  "Momentary Layer",
+  "Toggle Layer",
+  "Sticky Key",
+  "Sticky Layer",
+  "Bluetooth",
+  "Wireless",
+  "Output Selection",
+  "Transparent",
+  "None",
+  "Studio Unlock",
+  "Bootloader",
+  "Reset",
+  "External Power",
+  "Grave/Escape",
+  "Key Repeat",
+  "Key Toggle",
+  "Caps Word",
+  "Mouse Key Press",
+]);
+
+function isEncoderBehavior(behavior: GetBehaviorDetailsResponse | undefined): boolean {
+  return behavior !== undefined && !KEY_ONLY_BEHAVIOR_NAMES.has(behavior.displayName);
+}
+
+function bindingKey(binding: BehaviorBinding): string {
+  return `${binding.behaviorId}:${binding.param1 ?? 0}:${binding.param2 ?? 0}`;
+}
+
+interface EncoderPresetDefinition {
+  behaviorNames: string[];
+  param1: number;
+  param2: number;
+}
+
+const LINEA40_ENCODER_PRESET_DEFINITIONS: EncoderPresetDefinition[] = [
+  { behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"], param1: 65386, param2: 150 },
+  { behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"], param1: 786666, param2: 786665 },
+  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458833, param2: 458834 },
+  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458831, param2: 458832 },
+];
+
+function normalizeBehaviorName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function findEncoderBehaviorId(
+  behaviors: BehaviorMap,
+  behaviorNames: string[],
+): number | undefined {
+  const normalizedNames = behaviorNames.map(normalizeBehaviorName);
+  const behavior = Object.values(behaviors).find((b) => {
+    if (!isEncoderBehavior(b)) return false;
+    const displayName = normalizeBehaviorName(b.displayName);
+    return normalizedNames.some((name) => displayName.includes(name));
+  });
+  return behavior?.id;
+}
 
 function useBehaviors(): BehaviorMap {
   let connection = useContext(ConnectionContext);
@@ -187,6 +260,18 @@ export default function Keyboard() {
 
   useSub("keymap_saved", () => {
     if (keymap) setSavedKeymap(keymap);
+    setSavedEncoderLayerBindings(encoderLayerBindings);
+  });
+
+  useSub("keymap_discarded", () => {
+    if (!savedEncoderLayerBindings) return;
+    setEncoderLayerBindings(savedEncoderLayerBindings);
+    const idx = ripSubsystemIndexRef.current;
+    if (!customChannel || idx === null) return;
+    for (const saved of savedEncoderLayerBindings) {
+      setEncoderBinding(customChannel, idx, saved.layerId, saved.binding)
+        .catch((e) => console.error("Failed to revert encoder binding", e));
+    }
   });
 
   const [keymapScale, setKeymapScale] = useLocalStorageState<LayoutZoom>("keymapScale", "auto", {
@@ -197,14 +282,55 @@ export default function Keyboard() {
   const [selectedKeyPosition, setSelectedKeyPosition] = useState<
     number | undefined
   >(undefined);
+  const [selectedEncoder, setSelectedEncoder] = useState(false);
   const behaviors = useBehaviors();
 
   const conn = useContext(ConnectionContext);
   const undoRedo = useContext(UndoRedoContext);
+  const customChannel = useContext(CustomRpcContext);
+  const lockState = useContext(LockStateContext);
+  const pub = usePub();
+
+  const ripSubsystemIndexRef = useRef<number | null>(null);
+  const [encoderLayerBindings, setEncoderLayerBindings] = useState<
+    EncoderLayerBinding[] | null
+  >(null);
+  const [savedEncoderLayerBindings, setSavedEncoderLayerBindings] = useState<
+    EncoderLayerBinding[] | null
+  >(null);
+
+  useEffect(() => {
+    if (
+      !customChannel ||
+      lockState !== LockState.ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED
+    ) {
+      setEncoderLayerBindings(null);
+      setSavedEncoderLayerBindings(null);
+      ripSubsystemIndexRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      if (ripSubsystemIndexRef.current === null) {
+        ripSubsystemIndexRef.current = await findCormoranRipIndex(customChannel);
+      }
+      const idx = ripSubsystemIndexRef.current;
+      if (idx === null || cancelled) return;
+      const bindings = await getEncoderBindings(customChannel, idx);
+      if (!cancelled) {
+        setEncoderLayerBindings(bindings);
+        setSavedEncoderLayerBindings(bindings);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [customChannel, lockState]);
 
   useEffect(() => {
     setSelectedLayerIndex(0);
     setSelectedKeyPosition(undefined);
+    setSelectedEncoder(false);
   }, [conn]);
 
   useEffect(() => {
@@ -307,23 +433,127 @@ export default function Keyboard() {
     [conn, keymap, undoRedo, selectedLayerIndex, selectedKeyPosition]
   );
 
+  const hasEncoderChanges = useMemo<boolean>(() => {
+    if (!encoderLayerBindings || !savedEncoderLayerBindings) return false;
+    for (const cur of encoderLayerBindings) {
+      const sav = savedEncoderLayerBindings.find((e) => e.layerId === cur.layerId);
+      if (!sav) return true;
+      if (cur.binding.behaviorId !== sav.binding.behaviorId ||
+          cur.binding.param1 !== sav.binding.param1 ||
+          cur.binding.param2 !== sav.binding.param2) {
+        return true;
+      }
+    }
+    return false;
+  }, [encoderLayerBindings, savedEncoderLayerBindings]);
+
+  useEffect(() => {
+    pub("encoder_unsaved_changed", hasEncoderChanges);
+  }, [hasEncoderChanges]);
+
+  const encoderChangedForLayer = useMemo<boolean>(() => {
+    if (!encoderLayerBindings || !savedEncoderLayerBindings || !keymap?.layers[selectedLayerIndex]) return false;
+    const layerId = keymap.layers[selectedLayerIndex].id;
+    const cur = encoderLayerBindings.find((e) => e.layerId === layerId);
+    const sav = savedEncoderLayerBindings.find((e) => e.layerId === layerId);
+    if (!cur || !sav) return cur !== sav;
+    return (
+      cur.binding.behaviorId !== sav.binding.behaviorId ||
+      cur.binding.param1 !== sav.binding.param1 ||
+      cur.binding.param2 !== sav.binding.param2
+    );
+  }, [encoderLayerBindings, savedEncoderLayerBindings, keymap, selectedLayerIndex]);
+
+  const encoderBindingForLayer = useMemo<BehaviorBinding | null>(() => {
+    if (!encoderLayerBindings || !keymap?.layers[selectedLayerIndex]) return null;
+    const layerId = keymap.layers[selectedLayerIndex].id;
+    const entry = encoderLayerBindings.find((e) => e.layerId === layerId);
+    if (!entry) return null;
+    return { behaviorId: entry.binding.behaviorId, param1: entry.binding.param1, param2: entry.binding.param2 };
+  }, [encoderLayerBindings, keymap, selectedLayerIndex]);
+
+  const encoderBindingPresets = useMemo<BehaviorBinding[]>(() => {
+    const presets = new Map<string, BehaviorBinding>();
+    LINEA40_ENCODER_PRESET_DEFINITIONS.forEach((preset) => {
+      const behaviorId = findEncoderBehaviorId(behaviors, preset.behaviorNames);
+      if (behaviorId === undefined) return;
+      const binding = {
+        behaviorId,
+        param1: preset.param1,
+        param2: preset.param2,
+      };
+      presets.set(bindingKey(binding), binding);
+    });
+
+    const addPreset = (entry: EncoderLayerBinding) => {
+      if (!isEncoderBehavior(behaviors[entry.binding.behaviorId])) return;
+      const binding = {
+        behaviorId: entry.binding.behaviorId,
+        param1: entry.binding.param1,
+        param2: entry.binding.param2,
+      };
+      presets.set(bindingKey(binding), binding);
+    };
+
+    savedEncoderLayerBindings?.forEach(addPreset);
+    encoderLayerBindings?.forEach(addPreset);
+
+    return Array.from(presets.values());
+  }, [behaviors, encoderLayerBindings, savedEncoderLayerBindings]);
+
+  const doUpdateEncoderBinding = useCallback(async (binding: BehaviorBinding) => {
+    if (!customChannel || !keymap?.layers[selectedLayerIndex]) return;
+    const idx = ripSubsystemIndexRef.current;
+    if (idx === null) return;
+    const layerId = keymap.layers[selectedLayerIndex].id;
+    const updated = {
+      layerId,
+      binding: {
+        behaviorId: binding.behaviorId,
+        param1: binding.param1 ?? 0,
+        param2: binding.param2 ?? 0,
+      },
+    };
+
+    let previousBindings: EncoderLayerBinding[] | null = null;
+    setEncoderLayerBindings((prev) => {
+      previousBindings = prev;
+      if (!prev) return prev;
+      const exists = prev.find((e) => e.layerId === layerId);
+      return exists
+        ? prev.map((e) => e.layerId === layerId ? updated : e)
+        : [...prev, updated];
+    });
+
+    const ok = await setEncoderBinding(customChannel, idx, layerId, {
+      behaviorId: updated.binding.behaviorId,
+      param1: updated.binding.param1,
+      param2: updated.binding.param2,
+    });
+    if (!ok) {
+      console.error("Failed to set encoder binding", updated);
+      setEncoderLayerBindings(previousBindings);
+    }
+  }, [customChannel, keymap, selectedLayerIndex]);
+
   let selectedBinding = useMemo(() => {
+    if (selectedEncoder) return null;
     if (keymap == null || selectedKeyPosition == null || !keymap.layers[selectedLayerIndex]) {
       return null;
     }
 
     return keymap.layers[selectedLayerIndex].bindings[selectedKeyPosition];
-  }, [keymap, selectedLayerIndex, selectedKeyPosition]);
+  }, [keymap, selectedLayerIndex, selectedKeyPosition, selectedEncoder]);
 
   const selectedSavedBinding = useMemo(() => {
-    if (savedKeymap == null || selectedKeyPosition == null || !savedKeymap.layers[selectedLayerIndex]) {
+    if (selectedEncoder || savedKeymap == null || selectedKeyPosition == null || !savedKeymap.layers[selectedLayerIndex]) {
       return undefined;
     }
     const savedLayer = savedKeymap.layers.find(
       (l) => l.id === keymap?.layers[selectedLayerIndex]?.id
     );
     return savedLayer?.bindings[selectedKeyPosition];
-  }, [savedKeymap, keymap, selectedLayerIndex, selectedKeyPosition]);
+  }, [savedKeymap, keymap, selectedLayerIndex, selectedKeyPosition, selectedEncoder]);
 
   const changedLayers = useMemo(() => {
     if (!keymap || !savedKeymap) return new Set<number>();
@@ -561,12 +791,14 @@ export default function Keyboard() {
     }
   }, [keymap, selectedLayerIndex]);
 
+  const showPicker = (selectedBinding != null) || (selectedEncoder && encoderBindingForLayer != null);
+
   return (
     <div
       className="grid grid-cols-[auto_1fr] bg-base-300 max-w-full min-w-0 min-h-0 h-full"
-      style={{ gridTemplateRows: keymap && selectedBinding ? "3fr 2fr" : "1fr 0" }}
+      style={{ gridTemplateRows: showPicker ? "3fr 2fr" : "1fr 0" }}
     >
-      <div className="p-2 flex flex-col gap-2 bg-base-200 row-span-2">
+      <div className="p-2 flex flex-col gap-2 bg-base-200 row-span-2 overflow-y-auto">
         {layouts && (
           <div className="col-start-3 row-start-1 row-end-2">
             <PhysicalLayoutPicker
@@ -595,7 +827,7 @@ export default function Keyboard() {
         )}
       </div>
       {layouts && keymap && behaviors && (
-        <div className="p-2 col-start-2 row-start-1 grid items-center justify-center relative min-w-0">
+        <div className="p-2 col-start-2 row-start-1 flex flex-col gap-2 items-center justify-center relative min-w-0">
           <KeymapComp
             keymap={keymap}
             layout={layouts[selectedPhysicalLayoutIndex]}
@@ -604,8 +836,25 @@ export default function Keyboard() {
             selectedLayerIndex={selectedLayerIndex}
             selectedKeyPosition={selectedKeyPosition}
             changedKeyPositions={changedKeys}
-            onKeyPositionClicked={setSelectedKeyPosition}
+            onKeyPositionClicked={(pos) => {
+              setSelectedKeyPosition(pos);
+              setSelectedEncoder(false);
+            }}
           />
+          {encoderLayerBindings !== null && (
+            <div className="flex items-center gap-2">
+              <EncoderKey
+                binding={encoderBindingForLayer}
+                behaviors={behaviors}
+                selected={selectedEncoder}
+                changed={encoderChangedForLayer}
+                onClick={() => {
+                  setSelectedEncoder(true);
+                  setSelectedKeyPosition(undefined);
+                }}
+              />
+            </div>
+          )}
           <select
             className="absolute top-2 right-2 h-8 rounded px-2"
             value={keymapScale}
@@ -625,19 +874,28 @@ export default function Keyboard() {
           </select>
         </div>
       )}
-      {keymap && selectedBinding && (
+      {showPicker && keymap && (
         <div className="col-start-2 row-start-2 bg-base-200 overflow-hidden">
-          <BehaviorBindingPicker
-            binding={selectedBinding}
-            behaviors={Object.values(behaviors)}
-            layers={keymap.layers.map(({ id, name }, li) => ({
-              id,
-              name: name || li.toLocaleString(),
-            }))}
-            savedBinding={selectedSavedBinding}
-            onBindingChanged={doUpdateBinding}
-            onRevert={() => selectedSavedBinding && doUpdateBinding(selectedSavedBinding)}
-          />
+          {selectedEncoder && encoderBindingForLayer ? (
+            <EncoderBindingPicker
+              binding={encoderBindingForLayer}
+              behaviors={behaviors}
+              presets={encoderBindingPresets}
+              onBindingChanged={doUpdateEncoderBinding}
+            />
+          ) : selectedBinding ? (
+            <BehaviorBindingPicker
+              binding={selectedBinding}
+              behaviors={Object.values(behaviors)}
+              layers={keymap.layers.map(({ id, name }, li) => ({
+                id,
+                name: name || li.toLocaleString(),
+              }))}
+              savedBinding={selectedSavedBinding}
+              onBindingChanged={doUpdateBinding}
+              onRevert={() => selectedSavedBinding && doUpdateBinding(selectedSavedBinding)}
+            />
+          ) : null}
         </div>
       )}
     </div>

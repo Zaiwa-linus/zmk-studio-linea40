@@ -31,6 +31,7 @@ export interface AppHeaderProps {
   onDisconnect?: () => void | Promise<void>;
   canUndo?: boolean;
   canRedo?: boolean;
+  extraUnsaved?: boolean;
 }
 
 export const AppHeader = ({
@@ -43,6 +44,7 @@ export const AppHeader = ({
   onDiscard,
   onDisconnect,
   onResetSettings,
+  extraUnsaved,
 }: AppHeaderProps) => {
   const [showSettingsReset, setShowSettingsReset] = useState(false);
 
@@ -53,7 +55,7 @@ export const AppHeader = ({
   const [currentCpi, setCurrentCpi] = useState<number | null>(null);
   const subsystemIndexRef = useRef<number | null>(null);
 
-  // Poll current sensor CPI while connected and unlocked.
+  // Fetch sensor CPI once on connect/unlock.
   useEffect(() => {
     if (!customChannel || lockState !== LockState.ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED) {
       setCurrentCpi(null);
@@ -62,11 +64,8 @@ export const AppHeader = ({
     }
 
     let cancelled = false;
-    let inFlight = false;
 
-    const fetchCurrentCpi = async () => {
-      if (inFlight) return;
-      inFlight = true;
+    (async () => {
       try {
         if (subsystemIndexRef.current === null) {
           subsystemIndexRef.current = await findCormoranRipIndex(customChannel);
@@ -77,17 +76,11 @@ export const AppHeader = ({
         if (!cancelled) setCurrentCpi(cpi && cpi > 0 ? cpi : null);
       } catch (e) {
         console.error("Failed to fetch current CPI", e);
-      } finally {
-        inFlight = false;
       }
-    };
-
-    fetchCurrentCpi();
-    const intervalId = window.setInterval(fetchCurrentCpi, 2000);
+    })();
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
     };
   }, [customChannel, lockState]);
 
@@ -110,6 +103,8 @@ export const AppHeader = ({
   useSub("rpc_notification.keymap.unsavedChangesStatusChanged", (unsaved) =>
     setUnsaved(unsaved)
   );
+
+  const isUnsaved = unsaved || extraUnsaved;
 
   return (
     <header className="top-0 left-0 right-0 grid grid-cols-[1fr_auto_1fr] items-center justify-between h-10 max-w-full">
@@ -203,7 +198,7 @@ export const AppHeader = ({
         <Tooltip label="Save">
           <Button
             className="flex items-center justify-center p-1.5 rounded enabled:hover:bg-base-300 disabled:opacity-50"
-            isDisabled={!unsaved}
+            isDisabled={!isUnsaved}
             onPress={onSave}
           >
             <Save className="inline-block w-4 mx-1" aria-label="Save" />
@@ -213,7 +208,7 @@ export const AppHeader = ({
           <Button
             className="flex items-center justify-center p-1.5 rounded enabled:hover:bg-base-300 disabled:opacity-50"
             onPress={onDiscard}
-            isDisabled={!unsaved}
+            isDisabled={!isUnsaved}
           >
             <Trash2 className="inline-block w-4 mx-1" aria-label="Discard" />
           </Button>
