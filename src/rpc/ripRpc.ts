@@ -1,4 +1,5 @@
 import type { CustomRpcChannel } from "./customRpcChannel";
+import { queueRpc } from "./logging";
 
 /**
  * Manual protobuf encode/decode for the cormoran.rip custom subsystem.
@@ -505,13 +506,11 @@ const CUSTOM_RPC_TIMEOUT_MS = 10000;
 let nextCustomRequestId = 0x1000;
 function nextReqId() { return nextCustomRequestId++; }
 
-function readWithTimeout(channel: CustomRpcChannel): Promise<Uint8Array> {
-  return Promise.race([
-    channel.readCustomFrame(),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Custom RPC timeout")), CUSTOM_RPC_TIMEOUT_MS),
-    ),
-  ]);
+function readWithTimeout(
+  channel: CustomRpcChannel,
+  requestId: number,
+): Promise<Uint8Array> {
+  return channel.readCustomFrame(requestId, CUSTOM_RPC_TIMEOUT_MS);
 }
 
 /**
@@ -522,15 +521,13 @@ function readWithTimeout(channel: CustomRpcChannel): Promise<Uint8Array> {
 export function findCormoranRipIndex(
   channel: CustomRpcChannel,
 ): Promise<number | null> {
-  return channel.queueCustom(async () => {
+  return queueRpc(() => channel.queueCustom(async () => {
     const reqId = nextReqId();
     console.log(`[ripRpc] sending ListSubsystems reqId=${reqId}`);
     await channel.writeCustomFrame(encodeListSubsystemsRequest(reqId));
-    console.log(`[ripRpc] ListSubsystems frame sent, waiting for response...`);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const frame = await readWithTimeout(channel);
-      console.log(`[ripRpc] ListSubsystems attempt=${attempt} frame len=${frame.length}`);
+    try {
+      const frame = await readWithTimeout(channel, reqId);
       const resp = decodeListSubsystemsResponse(frame);
       console.log(`[ripRpc] ListSubsystems decoded:`, resp);
       if (resp && resp.requestId === reqId) {
@@ -539,9 +536,11 @@ export function findCormoranRipIndex(
         );
         return found?.index ?? null;
       }
+    } catch (e) {
+      console.error(`[ripRpc] ListSubsystems reqId=${reqId} failed`, e);
     }
     return null;
-  });
+  }));
 }
 
 /**
@@ -553,24 +552,24 @@ export function getInputProcessor(
   subsystemIndex: number,
   processorId: number,
 ): Promise<InputProcessorInfo | null> {
-  return channel.queueCustom(async () => {
+  return queueRpc(() => channel.queueCustom(async () => {
     const reqId = nextReqId();
     const encoded = encodeGetInputProcessorRequest(reqId, subsystemIndex, processorId);
-    console.log(`[ripRpc] sending GetInputProcessor reqId=${reqId} subsystemIndex=${subsystemIndex} processorId=${processorId} encoded=`, encoded);
+    console.log(`[ripRpc] sending GetInputProcessor reqId=${reqId} subsystemIndex=${subsystemIndex} processorId=${processorId}`);
     await channel.writeCustomFrame(encoded);
-    console.log(`[ripRpc] GetInputProcessor frame sent, waiting...`);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const frame = await readWithTimeout(channel);
-      console.log(`[ripRpc] GetInputProcessor attempt=${attempt} frame len=${frame.length}`, frame.slice(0, 16));
+    try {
+      const frame = await readWithTimeout(channel, reqId);
       const resp = decodeGetInputProcessorResponse(frame);
       console.log(`[ripRpc] GetInputProcessor decoded:`, resp);
       if (resp && resp.requestId === reqId) {
         return resp.processor;
       }
+    } catch (e) {
+      console.error(`[ripRpc] GetInputProcessor reqId=${reqId} failed`, e);
     }
     return null;
-  });
+  }));
 }
 
 /**
@@ -580,22 +579,24 @@ export function getEncoderBindings(
   channel: CustomRpcChannel,
   subsystemIndex: number,
 ): Promise<EncoderLayerBinding[] | null> {
-  return channel.queueCustom(async () => {
+  return queueRpc(() => channel.queueCustom(async () => {
     const reqId = nextReqId();
     const encoded = encodeGetEncoderBindingsRequest(reqId, subsystemIndex);
     console.log(`[ripRpc] sending GetEncoderBindings reqId=${reqId}`);
     await channel.writeCustomFrame(encoded);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const frame = await readWithTimeout(channel);
+    try {
+      const frame = await readWithTimeout(channel, reqId);
       const resp = decodeGetEncoderBindingsResponse(frame);
       if (resp && resp.requestId === reqId) {
         console.log(`[ripRpc] GetEncoderBindings: ${resp.layers.length} layers`);
         return resp.layers;
       }
+    } catch (e) {
+      console.error(`[ripRpc] GetEncoderBindings reqId=${reqId} failed`, e);
     }
     return null;
-  });
+  }));
 }
 
 /**
@@ -608,22 +609,24 @@ export function setEncoderBinding(
   layerId: number,
   binding: EncoderBinding,
 ): Promise<boolean> {
-  return channel.queueCustom(async () => {
+  return queueRpc(() => channel.queueCustom(async () => {
     const reqId = nextReqId();
     const encoded = encodeSetEncoderBindingRequest(reqId, subsystemIndex, layerId, binding);
     console.log(`[ripRpc] sending SetEncoderBinding reqId=${reqId} layerId=${layerId}`);
     await channel.writeCustomFrame(encoded);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const frame = await readWithTimeout(channel);
+    try {
+      const frame = await readWithTimeout(channel, reqId);
       const resp = decodeSetEncoderBindingResponse(frame);
       if (resp && resp.requestId === reqId) {
         console.log(`[ripRpc] SetEncoderBinding: ${resp.ok ? "success" : "error"}`);
         return resp.ok;
       }
+    } catch (e) {
+      console.error(`[ripRpc] SetEncoderBinding reqId=${reqId} failed`, e);
     }
     return false;
-  });
+  }));
 }
 
 /**
@@ -633,22 +636,22 @@ export function getCurrentCpi(
   channel: CustomRpcChannel,
   subsystemIndex: number,
 ): Promise<number | null> {
-  return channel.queueCustom(async () => {
+  return queueRpc(() => channel.queueCustom(async () => {
     const reqId = nextReqId();
     const encoded = encodeGetCurrentCpiRequest(reqId, subsystemIndex);
-    console.log(`[ripRpc] sending GetCurrentCpi reqId=${reqId} subsystemIndex=${subsystemIndex} encoded=`, encoded);
+    console.log(`[ripRpc] sending GetCurrentCpi reqId=${reqId} subsystemIndex=${subsystemIndex}`);
     await channel.writeCustomFrame(encoded);
-    console.log(`[ripRpc] GetCurrentCpi frame sent, waiting...`);
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const frame = await readWithTimeout(channel);
-      console.log(`[ripRpc] GetCurrentCpi attempt=${attempt} frame len=${frame.length}`, frame.slice(0, 16));
+    try {
+      const frame = await readWithTimeout(channel, reqId);
       const resp = decodeGetCurrentCpiResponse(frame);
       console.log(`[ripRpc] GetCurrentCpi decoded:`, resp);
       if (resp && resp.requestId === reqId) {
         return resp.cpi;
       }
+    } catch (e) {
+      console.error(`[ripRpc] GetCurrentCpi reqId=${reqId} failed`, e);
     }
     return null;
-  });
+  }));
 }

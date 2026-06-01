@@ -37,10 +37,10 @@ export function EncoderKey({ binding, behaviors, selected, changed, onClick }: E
   return (
     <button
       title="ロータリーエンコーダー"
-      className={`relative group rounded flex flex-col cursor-pointer transition-all hover:shadow-xl hover:ring-1 hover:ring-gray-300 hover:scale-105 ${
+      className={`relative group rounded-full flex flex-col cursor-pointer transition-all shadow-md ring-1 hover:shadow-xl hover:ring-2 hover:scale-105 ${
         selected ? "bg-primary text-primary-content" : "bg-base-100 text-base-content"
       }`}
-      style={{ width: "72px", height: "40px" }}
+      style={{ width: "92px", height: "92px" }}
       onClick={onClick}
     >
       {changed && (
@@ -52,9 +52,8 @@ export function EncoderKey({ binding, behaviors, selected, changed, onClick }: E
         }`}
       >
         <RotateCw size={8} />
-        <span>encoder</span>
       </div>
-      <div className="flex-1 flex items-center justify-center w-full overflow-hidden px-0.5 text-[11px] leading-none truncate">
+      <div className="flex-1 flex items-center justify-center w-full overflow-hidden px-1 pb-1 text-[10px] leading-none text-center whitespace-normal break-words [overflow-wrap:anywhere]">
         {bodyLabel}
       </div>
     </button>
@@ -62,13 +61,14 @@ export function EncoderKey({ binding, behaviors, selected, changed, onClick }: E
 }
 
 interface EncoderBindingPickerProps {
-  binding: BehaviorBinding;
+  binding: BehaviorBinding | null;
   behaviors: Record<number, GetBehaviorDetailsResponse>;
   presets: BehaviorBinding[];
   onBindingChanged: (binding: BehaviorBinding) => void;
 }
 
-function sameBinding(a: BehaviorBinding, b: BehaviorBinding): boolean {
+function sameBinding(a: BehaviorBinding | null, b: BehaviorBinding): boolean {
+  if (a === null) return false;
   return (
     a.behaviorId === b.behaviorId &&
     (a.param1 ?? 0) === (b.param1 ?? 0) &&

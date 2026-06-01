@@ -22,7 +22,12 @@ export function framingEncode(data: Uint8Array): Uint8Array {
 
 export interface CustomRpcChannel {
   writeCustomFrame: (data: Uint8Array) => Promise<void>;
-  readCustomFrame: () => Promise<Uint8Array>;
+  /**
+   * Wait for the custom response whose request_id matches `requestId`.
+   * Frames for other request ids are buffered (not discarded) so concurrent
+   * callers each receive their own response. Rejects on timeout.
+   */
+  readCustomFrame: (requestId: number, timeoutMs?: number) => Promise<Uint8Array>;
   /** Serialize custom RPC calls independently of the standard RPC queue. */
   queueCustom: <T>(fn: () => Promise<T>) => Promise<T>;
 }
@@ -47,13 +52,43 @@ export function interceptTransport(transport: RpcTransport): {
   });
 
   let standardCtrl!: ReadableStreamDefaultController<Uint8Array>;
-  let customCtrl!: ReadableStreamDefaultController<Uint8Array>;
   const standardReadable = new ReadableStream<Uint8Array>({
     start(c) { standardCtrl = c; },
   });
-  const customFrameReadable = new ReadableStream<Uint8Array>({
-    start(c) { customCtrl = c; },
-  });
+
+  // Buffer of received custom frames that no waiter has claimed yet, keyed by
+  // their request_id. Capped so orphaned responses (e.g. to a timed-out call)
+  // cannot grow without bound.
+  const MAX_BUFFERED_CUSTOM_FRAMES = 32;
+  const customFrames: Array<{ requestId: number; frame: Uint8Array }> = [];
+  const customWaiters: Array<{
+    requestId: number;
+    resolve: (frame: Uint8Array) => void;
+    reject: (error: Error) => void;
+    timer?: ReturnType<typeof setTimeout>;
+  }> = [];
+
+  function enqueueCustomFrame(frame: Uint8Array) {
+    const requestId = readCustomRequestId(frame);
+    const idx = customWaiters.findIndex((w) => w.requestId === requestId);
+    if (idx >= 0) {
+      const [waiter] = customWaiters.splice(idx, 1);
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.resolve(frame);
+      return;
+    }
+    customFrames.push({ requestId, frame });
+    if (customFrames.length > MAX_BUFFERED_CUSTOM_FRAMES) customFrames.shift();
+  }
+
+  function closeCustomFrames() {
+    while (customWaiters.length > 0) {
+      const waiter = customWaiters.shift()!;
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.reject(new Error("Custom RPC stream closed"));
+    }
+    customFrames.length = 0;
+  }
 
   // Framing decode state
   const enum S { IDLE, DATA, ESC }
@@ -64,7 +99,7 @@ export function interceptTransport(transport: RpcTransport): {
     const isCustom = isCustomResponse(frame);
     console.log(`[customRpc] frame arrived len=${frame.length} isCustom=${isCustom}`, frame.slice(0, 8));
     if (isCustom) {
-      customCtrl.enqueue(frame);
+      enqueueCustomFrame(frame);
     } else {
       standardCtrl.enqueue(framingEncode(frame));
     }
@@ -94,17 +129,35 @@ export function interceptTransport(transport: RpcTransport): {
     } finally {
       reader.releaseLock();
       try { standardCtrl.close(); } catch { /**/ }
-      try { customCtrl.close(); } catch { /**/ }
+      closeCustomFrames();
     }
   })();
 
-  // Single long-lived reader; safe because queueCustom serializes all callers.
-  const customReader = customFrameReadable.getReader();
+  async function readCustomFrame(
+    requestId: number,
+    timeoutMs?: number,
+  ): Promise<Uint8Array> {
+    const bufferedIdx = customFrames.findIndex((f) => f.requestId === requestId);
+    if (bufferedIdx >= 0) return customFrames.splice(bufferedIdx, 1)[0].frame;
 
-  async function readCustomFrame(): Promise<Uint8Array> {
-    const { done, value } = await customReader.read();
-    if (done) throw new Error("Custom RPC stream closed");
-    return value;
+    return new Promise((resolve, reject) => {
+      const waiter = { requestId, resolve, reject } as {
+        requestId: number;
+        resolve: (frame: Uint8Array) => void;
+        reject: (error: Error) => void;
+        timer?: ReturnType<typeof setTimeout>;
+      };
+
+      if (timeoutMs !== undefined) {
+        waiter.timer = setTimeout(() => {
+          const idx = customWaiters.indexOf(waiter);
+          if (idx >= 0) customWaiters.splice(idx, 1);
+          reject(new Error("Custom RPC timeout"));
+        }, timeoutMs);
+      }
+
+      customWaiters.push(waiter);
+    });
   }
 
   // Separate queue for custom RPCs — does NOT block the standard RPC queue.
@@ -153,6 +206,47 @@ function isCustomResponse(frame: Uint8Array): boolean {
     } else break;
   }
   return false;
+}
+
+// Extract the request_id from a custom response frame (zmk.studio.Response).
+// request_id is field 1 of the RequestResponse submessage (field 1, wire 2).
+// Returns -1 when no request_id is present.
+function readCustomRequestId(frame: Uint8Array): number {
+  let pos = 0;
+  while (pos < frame.length) {
+    const [tag, p1] = readVarint(frame, pos);
+    pos = p1;
+    const wire = tag & 7;
+    if (wire === 2) {
+      const [len, p2] = readVarint(frame, pos);
+      pos = p2;
+      if ((tag >>> 3) === 1) {
+        const inner = frame.subarray(pos, pos + len);
+        let ipos = 0;
+        while (ipos < inner.length) {
+          const [itag, ip1] = readVarint(inner, ipos);
+          ipos = ip1;
+          const iwire = itag & 7;
+          if ((itag >>> 3) === 1 && iwire === 0) {
+            const [rid] = readVarint(inner, ipos);
+            return rid;
+          }
+          if (iwire === 2) {
+            const [ilen, ip2] = readVarint(inner, ipos);
+            ipos = ip2 + ilen;
+          } else if (iwire === 0) {
+            const [, ip2] = readVarint(inner, ipos);
+            ipos = ip2;
+          } else break;
+        }
+      }
+      pos += len;
+    } else if (wire === 0) {
+      const [, p2] = readVarint(frame, pos);
+      pos = p2;
+    } else break;
+  }
+  return -1;
 }
 
 function hasField(data: Uint8Array, fieldNum: number): boolean {

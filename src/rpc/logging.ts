@@ -9,7 +9,7 @@ import {
 // the transport.  Custom callers use queueCustomRpc instead of call_rpc.
 let rpcQueue: Promise<unknown> = Promise.resolve();
 
-function queue<T>(fn: () => Promise<T>): Promise<T> {
+export function queueRpc<T>(fn: () => Promise<T>): Promise<T> {
   const p = rpcQueue.then(fn);
   rpcQueue = p.then(
     () => {},
@@ -22,7 +22,7 @@ export async function call_rpc(
   conn: RpcConnection,
   req: Omit<Request, "requestId">
 ): Promise<RequestResponse> {
-  return queue(async () => {
+  return queueRpc(async () => {
     console.log("RPC Request", req);
     return inner_call_rpc(conn, req)
       .then((r) => {
@@ -35,4 +35,3 @@ export async function call_rpc(
       });
   });
 }
-

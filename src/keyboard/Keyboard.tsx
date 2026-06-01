@@ -278,6 +278,11 @@ export default function Keyboard() {
     }
   });
 
+  useSub("keymap_saved", () => {
+    if (!encoderLayerBindings) return;
+    setSavedEncoderLayerBindings(encoderLayerBindings);
+  });
+
   const [keymapScale, setKeymapScale] = useLocalStorageState<LayoutZoom>("keymapScale", "auto", {
     deserialize: deserializeLayoutZoom,
   });
@@ -505,6 +510,11 @@ export default function Keyboard() {
     return Array.from(presets.values());
   }, [behaviors, encoderLayerBindings, savedEncoderLayerBindings]);
 
+  const keyAssignableBehaviors = useMemo<GetBehaviorDetailsResponse[]>(
+    () => Object.values(behaviors).filter((behavior) => !isEncoderBehavior(behavior)),
+    [behaviors]
+  );
+
   const doUpdateEncoderBinding = useCallback(async (binding: BehaviorBinding) => {
     if (!customChannel || !keymap?.layers[selectedLayerIndex]) return;
     const idx = ripSubsystemIndexRef.current;
@@ -537,7 +547,26 @@ export default function Keyboard() {
     if (!ok) {
       console.error("Failed to set encoder binding", updated);
       setEncoderLayerBindings(previousBindings);
+      return;
     }
+
+    const actualBindings = await getEncoderBindings(customChannel, idx);
+    const actual = actualBindings?.find((entry) => entry.layerId === layerId);
+    if (
+      !actual ||
+      actual.binding.behaviorId !== updated.binding.behaviorId ||
+      actual.binding.param1 !== updated.binding.param1 ||
+      actual.binding.param2 !== updated.binding.param2
+    ) {
+      console.error("Encoder binding did not persist after SetEncoderBinding", {
+        expected: updated,
+        actual,
+      });
+      setEncoderLayerBindings(previousBindings);
+      return;
+    }
+
+    setEncoderLayerBindings(actualBindings);
   }, [customChannel, keymap, selectedLayerIndex]);
 
   let selectedBinding = useMemo(() => {
@@ -795,7 +824,7 @@ export default function Keyboard() {
     }
   }, [keymap, selectedLayerIndex]);
 
-  const showPicker = (selectedBinding != null) || (selectedEncoder && encoderBindingForLayer != null);
+  const showPicker = (selectedBinding != null) || (selectedEncoder && encoderBindingPresets.length > 0);
 
   return (
     <div
@@ -846,7 +875,7 @@ export default function Keyboard() {
             }}
           />
           {encoderLayerBindings !== null && (
-            <div className="flex items-center gap-2">
+            <div className="absolute left-1/2 top-[42%] z-20 -translate-x-1/2 -translate-y-1/2">
               <EncoderKey
                 binding={encoderBindingForLayer}
                 behaviors={behaviors}
@@ -880,7 +909,7 @@ export default function Keyboard() {
       )}
       {showPicker && keymap && (
         <div className="col-start-2 row-start-2 bg-base-200 overflow-hidden">
-          {selectedEncoder && encoderBindingForLayer ? (
+          {selectedEncoder ? (
             <EncoderBindingPicker
               binding={encoderBindingForLayer}
               behaviors={behaviors}
@@ -890,7 +919,7 @@ export default function Keyboard() {
           ) : selectedBinding ? (
             <BehaviorBindingPicker
               binding={selectedBinding}
-              behaviors={Object.values(behaviors)}
+              behaviors={keyAssignableBehaviors}
               layers={keymap.layers.map(({ id, name }, li) => ({
                 id,
                 name: name || li.toLocaleString(),
