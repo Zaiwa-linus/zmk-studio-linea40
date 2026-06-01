@@ -96,6 +96,13 @@ interface EncoderPresetDefinition {
 // param1 = 時計回り(右回し) / param2 = 反時計回り(左回し)
 const LINEA40_ENCODER_PRESET_DEFINITIONS: EncoderPresetDefinition[] = [
   {
+    behaviorNames: ["sensor_transparent", "sensor_trans"],
+    param1: 0,
+    param2: 0,
+    label: "透過（下のレイヤーを継承）",
+    description: "このレイヤーでは割り当てず、下のレイヤーのエンコーダー動作を使う",
+  },
+  {
     behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"],
     param1: 65386,
     param2: 150,
