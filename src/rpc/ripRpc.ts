@@ -48,6 +48,11 @@ export interface InputProcessorInfo {
   name: string;
   scaleMultiplier: number;
   scaleDivisor: number;
+  /** Auto-mouse (temp-layer) settings */
+  tempLayerEnabled: boolean;
+  tempLayerLayer: number; // target layer id
+  tempLayerActivationDelayMs: number;
+  tempLayerDeactivationDelayMs: number;
 }
 
 export interface CustomSubsystemInfo {
@@ -178,6 +183,42 @@ export function encodeGetCurrentCpiRequest(
   // zmk.custom.Request { call: callReq }
   const customReq = fieldBytes(2, callReq);
 
+  return wrapStudioRequest(requestId, customReq);
+}
+
+/**
+ * Encode a SetTempLayerLayerRequest (auto-mouse target layer).
+ * cormoran.rip.Request.set_temp_layer_layer = field 8
+ * SetTempLayerLayerRequest: id=1, layer=2
+ */
+export function encodeSetTempLayerLayerRequest(
+  requestId: number,
+  subsystemIndex: number,
+  processorId: number,
+  layer: number,
+): Uint8Array {
+  const inner = [...fieldVarint(1, processorId), ...fieldVarint(2, layer)];
+  const ripReq = fieldBytes(8, inner);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
+  return wrapStudioRequest(requestId, customReq);
+}
+
+/**
+ * Encode a SetTempLayerDeactivationDelayRequest (auto-mouse timeout in ms).
+ * cormoran.rip.Request.set_temp_layer_deactivation_delay = field 10
+ * SetTempLayerDeactivationDelayRequest: id=1, deactivation_delay_ms=2
+ */
+export function encodeSetTempLayerDeactivationDelayRequest(
+  requestId: number,
+  subsystemIndex: number,
+  processorId: number,
+  deactivationDelayMs: number,
+): Uint8Array {
+  const inner = [...fieldVarint(1, processorId), ...fieldVarint(2, deactivationDelayMs)];
+  const ripReq = fieldBytes(10, inner);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
   return wrapStudioRequest(requestId, customReq);
 }
 
@@ -316,19 +357,40 @@ export function decodeGetInputProcessorResponse(
   });
 
   let id = 0, name = "", scaleMultiplier = 1, scaleDivisor = 1;
+  let tempLayerEnabled = false;
+  let tempLayerLayer = 0;
+  let tempLayerActivationDelayMs = 0;
+  let tempLayerDeactivationDelayMs = 0;
   if (processorBytes) {
     walkFields(processorBytes, (f, w, v) => {
       if (f === 1 && w === 0) id = v as number;
       if (f === 2 && w === 2) name = decodeString(v as Uint8Array);
       if (f === 3 && w === 0) scaleMultiplier = v as number;
       if (f === 4 && w === 0) scaleDivisor = v as number;
+      // 5 = rotation_degrees (unused here)
+      if (f === 6 && w === 0) tempLayerEnabled = (v as number) !== 0;
+      if (f === 7 && w === 0) tempLayerLayer = v as number;
+      if (f === 8 && w === 0) tempLayerActivationDelayMs = v as number;
+      if (f === 9 && w === 0) tempLayerDeactivationDelayMs = v as number;
     });
   }
 
   if (scaleMultiplier === 0) scaleMultiplier = 1;
   if (scaleDivisor === 0) scaleDivisor = 1;
 
-  return { requestId, processor: { id, name, scaleMultiplier, scaleDivisor } };
+  return {
+    requestId,
+    processor: {
+      id,
+      name,
+      scaleMultiplier,
+      scaleDivisor,
+      tempLayerEnabled,
+      tempLayerLayer,
+      tempLayerActivationDelayMs,
+      tempLayerDeactivationDelayMs,
+    },
+  };
 }
 
 /**
@@ -441,6 +503,59 @@ export function decodeSetEncoderBindingResponse(
   let found = false;
   walkFields(payload, (f, w, _v) => {
     if (f === 23 && w === 2) found = true;
+  });
+
+  return { requestId, ok: found || payload.length === 0 };
+}
+
+/**
+ * Decode a raw frame as a simple "set" response (empty message on success).
+ * `expectTag` is the cormoran.rip.Response field number for the matching setter.
+ * Returns true on success, false on error, null if the frame is not a matching
+ * custom response.
+ */
+export function decodeRipSetResponse(
+  frame: Uint8Array,
+  expectTag: number,
+): { requestId: number; ok: boolean } | null {
+  let requestResponseBytes: Uint8Array | null = null;
+  walkFields(frame, (f, w, v) => {
+    if (f === 1 && w === 2) requestResponseBytes = v as Uint8Array;
+  });
+  if (!requestResponseBytes) return null;
+
+  let requestId = 0;
+  let customBytes: Uint8Array | null = null;
+  walkFields(requestResponseBytes, (f, w, v) => {
+    if (f === 1 && w === 0) requestId = v as number;
+    if (f === 100 && w === 2) customBytes = v as Uint8Array;
+  });
+  if (!customBytes) return null;
+
+  let callResponseBytes: Uint8Array | null = null;
+  walkFields(customBytes, (f, w, v) => {
+    if (f === 2 && w === 2) callResponseBytes = v as Uint8Array;
+  });
+  if (!callResponseBytes) return null;
+
+  let ripPayload: Uint8Array | null = null;
+  walkFields(callResponseBytes, (f, w, v) => {
+    if (f === 2 && w === 2) ripPayload = v as Uint8Array;
+  });
+  if (!ripPayload) return null;
+  const payload = ripPayload as Uint8Array;
+
+  // cormoran.rip.Response.error = field 1
+  let hasError = false;
+  walkFields(payload, (f, w, _v) => {
+    if (f === 1 && w === 2) hasError = true;
+  });
+  if (hasError) return { requestId, ok: false };
+
+  // Matching response tag, or an empty success payload (nanopb omits empty messages).
+  let found = false;
+  walkFields(payload, (f, w, _v) => {
+    if (f === expectTag && w === 2) found = true;
   });
 
   return { requestId, ok: found || payload.length === 0 };
@@ -653,5 +768,76 @@ export function getCurrentCpi(
       console.error(`[ripRpc] GetCurrentCpi reqId=${reqId} failed`, e);
     }
     return null;
+  }));
+}
+
+/**
+ * Find the auto-mouse runtime input processor id by probing for the one whose
+ * processor-label is "mouse". Returns null if not found.
+ */
+export async function findMouseProcessorId(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+): Promise<number | null> {
+  for (let id = 0; id < 4; id++) {
+    const info = await getInputProcessor(channel, subsystemIndex, id);
+    if (info && info.name === "mouse") return id;
+  }
+  return null;
+}
+
+/**
+ * Set the auto-mouse target layer (temp-layer). Returns true on success.
+ */
+export function setTempLayerLayer(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+  processorId: number,
+  layer: number,
+): Promise<boolean> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    const encoded = encodeSetTempLayerLayerRequest(reqId, subsystemIndex, processorId, layer);
+    console.log(`[ripRpc] sending SetTempLayerLayer reqId=${reqId} id=${processorId} layer=${layer}`);
+    await channel.writeCustomFrame(encoded);
+
+    try {
+      const frame = await readWithTimeout(channel, reqId);
+      // cormoran.rip.Response.set_temp_layer_layer = field 9
+      const resp = decodeRipSetResponse(frame, 9);
+      if (resp && resp.requestId === reqId) return resp.ok;
+    } catch (e) {
+      console.error(`[ripRpc] SetTempLayerLayer reqId=${reqId} failed`, e);
+    }
+    return false;
+  }));
+}
+
+/**
+ * Set the auto-mouse deactivation delay (timeout, ms). Returns true on success.
+ */
+export function setTempLayerDeactivationDelay(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+  processorId: number,
+  deactivationDelayMs: number,
+): Promise<boolean> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    const encoded = encodeSetTempLayerDeactivationDelayRequest(
+      reqId, subsystemIndex, processorId, deactivationDelayMs,
+    );
+    console.log(`[ripRpc] sending SetTempLayerDeactivationDelay reqId=${reqId} id=${processorId} ms=${deactivationDelayMs}`);
+    await channel.writeCustomFrame(encoded);
+
+    try {
+      const frame = await readWithTimeout(channel, reqId);
+      // cormoran.rip.Response.set_temp_layer_deactivation_delay = field 11
+      const resp = decodeRipSetResponse(frame, 11);
+      if (resp && resp.requestId === reqId) return resp.ok;
+    } catch (e) {
+      console.error(`[ripRpc] SetTempLayerDeactivationDelay reqId=${reqId} failed`, e);
+    }
+    return false;
   }));
 }

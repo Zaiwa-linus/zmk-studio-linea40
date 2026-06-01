@@ -7,7 +7,7 @@ import {
 } from "react-aria-components";
 import { useConnectedDeviceData } from "./rpc/useConnectedDeviceData";
 import { useSub } from "./usePubSub";
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useModalRef } from "./misc/useModalRef";
 import { LockStateContext } from "./rpc/LockStateContext";
 import { LockState } from "@zmkfirmware/zmk-studio-ts-client/core";
@@ -15,11 +15,6 @@ import { ConnectionContext } from "./rpc/ConnectionContext";
 import { ChevronDown, Undo2, Redo2, Save, Trash2 } from "lucide-react";
 import { Tooltip } from "./misc/Tooltip";
 import { GenericModal } from "./GenericModal";
-import { CustomRpcContext } from "./rpc/CustomRpcContext";
-import {
-  findCormoranRipIndex,
-  getCurrentCpi,
-} from "./rpc/ripRpc";
 
 export interface AppHeaderProps {
   connectedDeviceLabel?: string;
@@ -50,39 +45,6 @@ export const AppHeader = ({
 
   const lockState = useContext(LockStateContext);
   const connectionState = useContext(ConnectionContext);
-  const customChannel = useContext(CustomRpcContext);
-
-  const [currentCpi, setCurrentCpi] = useState<number | null>(null);
-  const subsystemIndexRef = useRef<number | null>(null);
-
-  // Fetch sensor CPI once on connect/unlock.
-  useEffect(() => {
-    if (!customChannel || lockState !== LockState.ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED) {
-      setCurrentCpi(null);
-      subsystemIndexRef.current = null;
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        if (subsystemIndexRef.current === null) {
-          subsystemIndexRef.current = await findCormoranRipIndex(customChannel);
-        }
-        const idx = subsystemIndexRef.current;
-        if (idx === null || cancelled) return;
-        const cpi = await getCurrentCpi(customChannel, idx);
-        if (!cancelled) setCurrentCpi(cpi && cpi > 0 ? cpi : null);
-      } catch (e) {
-        console.error("Failed to fetch current CPI", e);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [customChannel, lockState]);
 
   useEffect(() => {
     if (
@@ -111,13 +73,6 @@ export const AppHeader = ({
       <div className="flex px-3 items-center gap-2">
         <img src="/zmk.svg" alt="ZMK Logo" className="h-8 rounded" />
         <p>Studio</p>
-        {currentCpi !== null && (
-          <Tooltip label="Current sensor CPI">
-            <span className="text-xs text-base-content/60 tabular-nums">
-              {currentCpi} DPI
-            </span>
-          </Tooltip>
-        )}
       </div>
       <GenericModal ref={showSettingsRef} className="max-w-[50vw]">
         <h2 className="my-2 text-lg">Restore Stock Settings</h2>

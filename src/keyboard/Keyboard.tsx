@@ -21,8 +21,10 @@ import {
 } from "@zmkfirmware/zmk-studio-ts-client/keymap";
 import type { GetBehaviorDetailsResponse } from "@zmkfirmware/zmk-studio-ts-client/behaviors";
 
+import { SlidersHorizontal } from "lucide-react";
 import { LayerPicker } from "./LayerPicker";
 import { PhysicalLayoutPicker } from "./PhysicalLayoutPicker";
+import { GlobalSettings } from "../GlobalSettings";
 import { Keymap as KeymapComp } from "./Keymap";
 import { EncoderBindingPicker, EncoderKey } from "./EncoderBindings";
 import { useConnectedDeviceData } from "../rpc/useConnectedDeviceData";
@@ -292,6 +294,7 @@ export default function Keyboard() {
     number | undefined
   >(undefined);
   const [selectedEncoder, setSelectedEncoder] = useState(false);
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const behaviors = useBehaviors();
 
   const conn = useContext(ConnectionContext);
@@ -340,7 +343,13 @@ export default function Keyboard() {
     setSelectedLayerIndex(0);
     setSelectedKeyPosition(undefined);
     setSelectedEncoder(false);
+    setShowGlobalSettings(false);
   }, [conn]);
+
+  const selectLayer = useCallback((i: number) => {
+    setShowGlobalSettings(false);
+    setSelectedLayerIndex(i);
+  }, []);
 
   useEffect(() => {
     async function performSetRequest() {
@@ -829,7 +838,13 @@ export default function Keyboard() {
   return (
     <div
       className="grid grid-cols-[auto_1fr] bg-base-300 max-w-full min-w-0 min-h-0 h-full"
-      style={{ gridTemplateRows: showPicker ? "3fr 2fr" : "1fr 0" }}
+      style={{
+        gridTemplateRows: showGlobalSettings
+          ? "1fr 0"
+          : showPicker
+          ? "3fr 2fr"
+          : "1fr 0",
+      }}
     >
       <div className="p-2 flex flex-col gap-2 bg-base-200 row-span-2 overflow-y-auto">
         {layouts && (
@@ -843,12 +858,31 @@ export default function Keyboard() {
         )}
 
         {keymap && (
+          <button
+            type="button"
+            className={`flex items-center gap-1.5 rounded p-1 text-sm transition-colors ${
+              showGlobalSettings
+                ? "bg-primary text-primary-content"
+                : "hover:bg-base-300"
+            }`}
+            onClick={() => {
+              setShowGlobalSettings(true);
+              setSelectedKeyPosition(undefined);
+              setSelectedEncoder(false);
+            }}
+          >
+            <SlidersHorizontal className="size-4" />
+            Global Settings
+          </button>
+        )}
+
+        {keymap && (
           <div className="col-start-1 row-start-1 row-end-2">
             <LayerPicker
               layers={keymap.layers}
               selectedLayerIndex={selectedLayerIndex}
               changedLayerIndices={changedLayers}
-              onLayerClicked={setSelectedLayerIndex}
+              onLayerClicked={selectLayer}
               onLayerMoved={moveLayer}
               canAdd={(keymap.availableLayers || 0) > 0}
               canRemove={(keymap.layers?.length || 0) > 1}
@@ -859,6 +893,12 @@ export default function Keyboard() {
           </div>
         )}
       </div>
+      {showGlobalSettings ? (
+        <div className="col-start-2 row-start-1 row-span-2 overflow-hidden">
+          <GlobalSettings />
+        </div>
+      ) : (
+      <>
       {layouts && keymap && behaviors && (
         <div className="p-2 col-start-2 row-start-1 flex flex-col gap-2 items-center justify-center relative min-w-0">
           <KeymapComp
@@ -930,6 +970,8 @@ export default function Keyboard() {
             />
           ) : null}
         </div>
+      )}
+      </>
       )}
     </div>
   );
