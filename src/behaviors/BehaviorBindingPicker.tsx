@@ -45,6 +45,8 @@ function validateBinding(
 // Maps firmware-provided displayName to UI label (avoids vendor trademark issues)
 const BEHAVIOR_NAME_OVERRIDES: Record<string, string> = {
   "Bluetooth": "Wireless",
+  bt_layer: "Wireless Layer",
+  bt_base: "Wireless Base",
 };
 
 const behaviorLabel = (firmwareName: string): string =>
@@ -58,6 +60,8 @@ const BEHAVIOR_PRIORITY: string[] = [
   "Toggle Layer",
   "Sticky Key",
   "Wireless",
+  "Wireless Layer",
+  "Wireless Base",
   "Output Selection",
   "Transparent",
   "None",
@@ -84,6 +88,10 @@ const BEHAVIOR_DESCRIPTIONS: Record<string, string> = {
     "次の1キー入力にだけ、指定した修飾キーを適用します。例: &sk LSHIFT → 押してから文字キーを押すと、Shift を押し続けなくてもその1文字だけ大文字になります。",
   "Wireless":
     "ワイヤレス接続プロファイルの切り替え・クリアを制御します。BT_SEL 0〜4 でデバイス切り替え、BT_CLR で現在のプロファイル接続解除、BT_CLR_ALL で全プロファイルを一括クリアします。",
+  "Wireless Layer":
+    "BT0〜BT4 の接続先を選択し、BT0 はレイヤー 0 相当に戻し、BT1〜BT4 は対応するレイヤー 1〜4 を有効化します。接続先ごとにOS差分レイヤーを使い分けたい場合に使います。",
+  "Wireless Base":
+    "BT0〜BT4 の接続先を選択し、レイヤー 1〜4 をすべて無効化してデフォルトレイヤー相当に戻します。OS差分レイヤーを使わない接続先に使います。",
   "Output Selection":
     "入力の出力先（USB / BLE）を選択します。OUT_USB で USB ホストへの入力を優先、OUT_BLE で Bluetooth を優先。同時接続している場合にどちらへ送るかを制御します。",
   "Transparent":

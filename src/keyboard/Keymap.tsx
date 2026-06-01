@@ -20,6 +20,8 @@ type BehaviorMap = Record<number, GetBehaviorDetailsResponse>;
 
 const BEHAVIOR_NAME_OVERRIDES: Record<string, string> = {
   Bluetooth: "Wireless",
+  bt_layer: "Wireless Layer",
+  bt_base: "Wireless Base",
 };
 
 const behaviorLabel = (behavior: GetBehaviorDetailsResponse | undefined): string =>
@@ -140,6 +142,14 @@ function formatWirelessAction(name: string | undefined, param2: number): string[
   }
 }
 
+function formatWirelessLayerAction(param1: number): string[] {
+  return [`BT${param1}`, `L${param1}`];
+}
+
+function formatWirelessBaseAction(param1: number): string[] {
+  return [`BT${param1}`, "L0"];
+}
+
 function StackedLabel({
   lines,
   className = "",
@@ -187,6 +197,24 @@ function bindingContent(
       <StackedLabel
         className="text-[9px]"
         lines={formatWirelessAction(constantName(behavior, binding.param1 ?? 0), binding.param2 ?? 0)}
+      />
+    );
+  }
+
+  if (isBehavior(behavior, ["Wireless Layer", "bt_layer"])) {
+    return (
+      <StackedLabel
+        className="text-[9px]"
+        lines={formatWirelessLayerAction(binding.param1 ?? 0)}
+      />
+    );
+  }
+
+  if (isBehavior(behavior, ["Wireless Base", "bt_base"])) {
+    return (
+      <StackedLabel
+        className="text-[9px]"
+        lines={formatWirelessBaseAction(binding.param1 ?? 0)}
       />
     );
   }
