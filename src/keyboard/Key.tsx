@@ -61,10 +61,10 @@ export const Key = ({
       {changed && (
         <span className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-purple-500 z-50 pointer-events-none" />
       )}
-      <div className={`text-[9px] font-light opacity-70 w-full px-0.5 pt-0.5 leading-none truncate text-center ${selected ? "text-primary-content" : "text-base-content"}`}>
+      <div className={`text-[8px] font-light opacity-70 w-full px-0.5 pt-0.5 leading-none text-center whitespace-normal break-words [overflow-wrap:anywhere] ${selected ? "text-primary-content" : "text-base-content"}`}>
         {shortenHeader(header)}
       </div>
-      <div className="flex-1 flex items-center justify-center w-full overflow-hidden px-0.5 text-[11px] leading-none truncate">
+      <div className="flex-1 flex items-center justify-center w-full min-w-0 overflow-hidden px-0.5 text-[10px] leading-none text-center whitespace-normal break-words [overflow-wrap:anywhere]">
         {children}
       </div>
     </button>

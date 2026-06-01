@@ -1,5 +1,6 @@
 {
     "Key Press": {"short": "kp"},
+    "Bluetooth": {"short": "Wireless"},
     "Bootloader": {"short": "Bootloadr"},
     "External Power": {"short": "Ext Pwr"},
     "Grave/Escape": {"short": "Grv/Esc"},
@@ -10,5 +11,5 @@
     "Sticky Key": {"short": "Stcky Key"},
     "Studio Unlock": {"short": "Unlock"},
     "Toggle Layer": {"short": "Togg Layr"},
-    "Transparent": {"short": "Transprnt"}
+    "Transparent": {"short": ""}
 }
