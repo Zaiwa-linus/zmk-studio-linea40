@@ -30,6 +30,12 @@ export interface CustomRpcChannel {
   readCustomFrame: (requestId: number, timeoutMs?: number) => Promise<Uint8Array>;
   /** Serialize custom RPC calls independently of the standard RPC queue. */
   queueCustom: <T>(fn: () => Promise<T>) => Promise<T>;
+  /**
+   * Discard any buffered custom response frames that no waiter has claimed.
+   * Used on tab-visibility restore to drop stale responses from before a
+   * USB suspend/resume window. Returns the number of frames dropped.
+   */
+  drain: () => number;
 }
 
 export function interceptTransport(transport: RpcTransport): {
@@ -160,6 +166,15 @@ export function interceptTransport(transport: RpcTransport): {
     });
   }
 
+  function drain(): number {
+    const dropped = customFrames.length;
+    if (dropped > 0) {
+      console.log(`[customRpc] drain: dropping ${dropped} stale buffered frame(s)`);
+      customFrames.length = 0;
+    }
+    return dropped;
+  }
+
   // Separate queue for custom RPCs — does NOT block the standard RPC queue.
   let customQueue: Promise<unknown> = Promise.resolve();
   function queueCustom<T>(fn: () => Promise<T>): Promise<T> {
@@ -180,6 +195,7 @@ export function interceptTransport(transport: RpcTransport): {
       writeCustomFrame: (data) => writeRaw(framingEncode(data)),
       readCustomFrame,
       queueCustom,
+      drain,
     },
   };
 }

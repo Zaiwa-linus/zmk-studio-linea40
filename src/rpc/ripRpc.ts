@@ -791,6 +791,59 @@ export function getCurrentCpi(
   }));
 }
 
+// ウォームアップ用の軽いping設定。復帰直後の「不調な窓」を、ユーザー操作の前に
+// 短タイムアウトの空打ちで潰す。ListSubsystemsは副作用ゼロ（keymapを書き換えない）
+// かつ最小ペイロードのcustom RPC往復なので、健全性チェックに最適。
+const WARMUP_PING_ATTEMPTS = 4;
+const WARMUP_PING_TIMEOUT_MS = 800;
+
+/**
+ * 単発のListSubsystems pingを短タイムアウトで投げ、応答が返れば true。
+ * custom経路が生きているかの軽量プローブ。
+ */
+function pingCustomChannelOnce(channel: CustomRpcChannel): Promise<boolean> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    await channel.writeCustomFrame(encodeListSubsystemsRequest(reqId));
+    try {
+      const frame = await readWithTimeout(channel, reqId, WARMUP_PING_TIMEOUT_MS);
+      const resp = decodeListSubsystemsResponse(frame);
+      return !!resp && resp.requestId === reqId;
+    } catch {
+      return false;
+    }
+  }));
+}
+
+/**
+ * タブ復帰（visibilitychange→visible）時の復旧処理。
+ *
+ * 1. drain: USBサスペンド/レジュームをまたいで残った古いcustom応答frameを捨てる。
+ * 2. warmup: 軽いcustom ping（ListSubsystems）を最大 WARMUP_PING_ATTEMPTS 回。
+ *    1回でも応答が返れば「不調な窓」を抜けたとみなし true を返す。
+ *
+ * ユーザーがエンコーダー割り当てを変更する前にこれを走らせることで、
+ * 復帰直後にチャネル全体が不調な窓でSETが全滅する問題を先回りで潰す。
+ * 全ping失敗時は false（呼び出し側で再接続を検討）。
+ */
+export async function warmupCustomChannel(
+  channel: CustomRpcChannel,
+): Promise<boolean> {
+  channel.drain();
+  for (let attempt = 1; attempt <= WARMUP_PING_ATTEMPTS; attempt++) {
+    const ok = await pingCustomChannelOnce(channel);
+    if (ok) {
+      if (attempt > 1) {
+        console.log(`[ripRpc] warmup: custom channel healthy after ${attempt} pings`);
+      }
+      return true;
+    }
+    console.warn(`[ripRpc] warmup ping ${attempt}/${WARMUP_PING_ATTEMPTS} failed`);
+  }
+  console.error(`[ripRpc] warmup: custom channel still unhealthy after ${WARMUP_PING_ATTEMPTS} pings`);
+  return false;
+}
+
 /**
  * Find the auto-mouse runtime input processor id by probing for the one whose
  * processor-label is "mouse". Returns null if not found.

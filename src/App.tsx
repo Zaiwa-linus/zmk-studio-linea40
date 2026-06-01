@@ -3,6 +3,7 @@ import { AppHeader } from "./AppHeader";
 import { create_rpc_connection } from "@zmkfirmware/zmk-studio-ts-client";
 import { call_rpc } from "./rpc/logging";
 import { interceptTransport, type CustomRpcChannel } from "./rpc/customRpcChannel";
+import { warmupCustomChannel } from "./rpc/ripRpc";
 import { CustomRpcContext } from "./rpc/CustomRpcContext";
 
 import type { Notification } from "@zmkfirmware/zmk-studio-ts-client/studio";
@@ -210,6 +211,30 @@ function App() {
 
     updateLockState();
   }, [conn, setLockState]);
+
+  // タブを非アクティブ→アクティブに戻した直後は、USBサスペンド/レジュームの影響で
+  // custom RPC（エンコーダーset等）が無応答になる「不調な窓」が発生する。
+  // ユーザーが操作する前に drain＋軽いping でこの窓を先回りで潰す。
+  // 詳細: 50_projects/LINEA40-custom-firmware/PLAN.md「既知の問題: エンコーダーset の間欠失敗」
+  useEffect(() => {
+    if (!customChannel || !conn.conn) {
+      return;
+    }
+    const channel = customChannel;
+
+    function onVisibilityChange() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      warmupCustomChannel(channel).catch((e) =>
+        console.error("[App] custom channel warmup failed", e)
+      );
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [customChannel, conn]);
 
   const save = useCallback(() => {
     async function doSave() {
