@@ -27,6 +27,7 @@ import { PhysicalLayoutPicker } from "./PhysicalLayoutPicker";
 import { GlobalSettings } from "../GlobalSettings";
 import { Keymap as KeymapComp } from "./Keymap";
 import { EncoderBindingPicker, EncoderKey } from "./EncoderBindings";
+import type { EncoderPreset } from "./EncoderBindings";
 import { useConnectedDeviceData } from "../rpc/useConnectedDeviceData";
 import { ConnectionContext } from "../rpc/ConnectionContext";
 import { CustomRpcContext } from "../rpc/CustomRpcContext";
@@ -84,17 +85,68 @@ interface EncoderPresetDefinition {
   behaviorNames: string[];
   param1: number;
   param2: number;
+  label: string;
+  description: string;
 }
 
+// param1 = 時計回り(右回し) / param2 = 反時計回り(左回し)
 const LINEA40_ENCODER_PRESET_DEFINITIONS: EncoderPresetDefinition[] = [
-  { behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"], param1: 65386, param2: 150 },
-  { behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"], param1: 150, param2: 65386 },
-  { behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"], param1: 786666, param2: 786665 },
-  { behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"], param1: 786665, param2: 786666 },
-  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458833, param2: 458834 },
-  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458834, param2: 458833 },
-  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458831, param2: 458832 },
-  { behaviorNames: ["enc_key_p", "inc_dec_kp"], param1: 458832, param2: 458831 },
+  {
+    behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"],
+    param1: 65386,
+    param2: 150,
+    label: "縦スクロール",
+    description: "右回し: 下へ / 左回し: 上へ",
+  },
+  {
+    behaviorNames: ["mouse_whe", "mouse_scrl", "mouse_wheel"],
+    param1: 150,
+    param2: 65386,
+    label: "縦スクロール（反転）",
+    description: "右回し: 上へ / 左回し: 下へ",
+  },
+  {
+    behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"],
+    param1: 786665,
+    param2: 786666,
+    label: "音量",
+    description: "右回し: 音量を上げる / 左回し: 下げる",
+  },
+  {
+    behaviorNames: ["sensor_ro", "re_kp", "sensor_rotate"],
+    param1: 786666,
+    param2: 786665,
+    label: "音量（反転）",
+    description: "右回し: 音量を下げる / 左回し: 上げる",
+  },
+  {
+    behaviorNames: ["enc_key_p", "inc_dec_kp"],
+    param1: 458834,
+    param2: 458833,
+    label: "上下キー（↑↓）",
+    description: "右回し: ↑ / 左回し: ↓",
+  },
+  {
+    behaviorNames: ["enc_key_p", "inc_dec_kp"],
+    param1: 458833,
+    param2: 458834,
+    label: "上下キー（反転）",
+    description: "右回し: ↓ / 左回し: ↑",
+  },
+  {
+    behaviorNames: ["enc_key_p", "inc_dec_kp"],
+    param1: 458831,
+    param2: 458832,
+    label: "左右キー（←→）",
+    description: "右回し: → / 左回し: ←",
+  },
+  {
+    behaviorNames: ["enc_key_p", "inc_dec_kp"],
+    param1: 458832,
+    param2: 458831,
+    label: "左右キー（反転）",
+    description: "右回し: ← / 左回し: →",
+  },
 ];
 
 function normalizeBehaviorName(name: string): string {
@@ -490,8 +542,8 @@ export default function Keyboard() {
     return { behaviorId: entry.binding.behaviorId, param1: entry.binding.param1, param2: entry.binding.param2 };
   }, [encoderLayerBindings, keymap, selectedLayerIndex]);
 
-  const encoderBindingPresets = useMemo<BehaviorBinding[]>(() => {
-    const presets = new Map<string, BehaviorBinding>();
+  const encoderBindingPresets = useMemo<EncoderPreset[]>(() => {
+    const presets = new Map<string, EncoderPreset>();
     LINEA40_ENCODER_PRESET_DEFINITIONS.forEach((preset) => {
       const behaviorId = findEncoderBehaviorId(behaviors, preset.behaviorNames);
       if (behaviorId === undefined) return;
@@ -500,17 +552,30 @@ export default function Keyboard() {
         param1: preset.param1,
         param2: preset.param2,
       };
-      presets.set(bindingKey(binding), binding);
+      presets.set(bindingKey(binding), {
+        binding,
+        label: preset.label,
+        description: preset.description,
+      });
     });
 
+    // 現在/保存済みの割り当てが定義済みプリセットに無い場合のフォールバック
     const addPreset = (entry: EncoderLayerBinding) => {
-      if (!isEncoderBehavior(behaviors[entry.binding.behaviorId])) return;
+      const behavior = behaviors[entry.binding.behaviorId];
+      if (!isEncoderBehavior(behavior)) return;
       const binding = {
         behaviorId: entry.binding.behaviorId,
         param1: entry.binding.param1,
         param2: entry.binding.param2,
       };
-      presets.set(bindingKey(binding), binding);
+      const key = bindingKey(binding);
+      if (presets.has(key)) return;
+      const behaviorName = behavior?.displayName ?? `#${binding.behaviorId}`;
+      presets.set(key, {
+        binding,
+        label: `${behaviorName}（現在の設定）`,
+        description: `右回し: ${binding.param1 ?? 0} / 左回し: ${binding.param2 ?? 0}`,
+      });
     };
 
     savedEncoderLayerBindings?.forEach(addPreset);
@@ -952,7 +1017,6 @@ export default function Keyboard() {
           {selectedEncoder ? (
             <EncoderBindingPicker
               binding={encoderBindingForLayer}
-              behaviors={behaviors}
               presets={encoderBindingPresets}
               onBindingChanged={doUpdateEncoderBinding}
             />

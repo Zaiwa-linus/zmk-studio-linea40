@@ -60,10 +60,15 @@ export function EncoderKey({ binding, behaviors, selected, changed, onClick }: E
   );
 }
 
+export interface EncoderPreset {
+  binding: BehaviorBinding;
+  label: string;
+  description?: string;
+}
+
 interface EncoderBindingPickerProps {
   binding: BehaviorBinding | null;
-  behaviors: Record<number, GetBehaviorDetailsResponse>;
-  presets: BehaviorBinding[];
+  presets: EncoderPreset[];
   onBindingChanged: (binding: BehaviorBinding) => void;
 }
 
@@ -76,50 +81,55 @@ function sameBinding(a: BehaviorBinding | null, b: BehaviorBinding): boolean {
   );
 }
 
-function bindingLabel(
-  binding: BehaviorBinding,
-  behaviors: Record<number, GetBehaviorDetailsResponse>,
-): string {
-  const behavior = behaviors[binding.behaviorId];
-  const behaviorName = behavior?.displayName
-    ? shortenLabel(behavior.displayName)
-    : `#${binding.behaviorId}`;
-  return `${behaviorName} ${binding.param1 ?? 0}/${binding.param2 ?? 0}`;
+function presetKey(binding: BehaviorBinding): string {
+  return `${binding.behaviorId}:${binding.param1 ?? 0}:${binding.param2 ?? 0}`;
 }
 
 export function EncoderBindingPicker({
   binding,
-  behaviors,
   presets,
   onBindingChanged,
 }: EncoderBindingPickerProps) {
   return (
     <div className="h-full flex flex-col overflow-hidden bg-base-200">
       <div className="px-4 py-2.5 border-b border-base-300 shrink-0">
-        <div className="font-semibold text-base">Encoder</div>
+        <div className="font-semibold text-base">ロータリーエンコーダーの動作</div>
         <div className="text-sm text-base-content/50 mt-0.5">
-          センサー用の割り当てだけを選択できます。
+          ノブを回したときの動作を選びます。
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {presets.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          <div className="flex flex-col gap-1.5">
             {presets.map((preset) => {
-              const selected = sameBinding(binding, preset);
+              const selected = sameBinding(binding, preset.binding);
               return (
-                <button
-                  key={`${preset.behaviorId}:${preset.param1 ?? 0}:${preset.param2 ?? 0}`}
-                  type="button"
-                  disabled={selected}
-                  onClick={() => onBindingChanged(preset)}
-                  className={`rounded px-3 py-2 text-left text-sm border transition-colors ${
+                <label
+                  key={presetKey(preset.binding)}
+                  className={`flex items-start gap-3 rounded-lg px-3 py-2.5 border cursor-pointer transition-colors ${
                     selected
-                      ? "bg-primary text-primary-content border-primary"
+                      ? "bg-primary/10 border-primary"
                       : "bg-base-100 hover:bg-base-300 border-base-300"
                   }`}
                 >
-                  {bindingLabel(preset, behaviors)}
-                </button>
+                  <input
+                    type="radio"
+                    name="encoder-binding"
+                    className="radio radio-primary radio-sm mt-0.5 shrink-0"
+                    checked={selected}
+                    onChange={() => onBindingChanged(preset.binding)}
+                  />
+                  <span className="flex flex-col min-w-0">
+                    <span className="text-sm font-medium leading-tight">
+                      {preset.label}
+                    </span>
+                    {preset.description && (
+                      <span className="text-xs text-base-content/60 mt-0.5 leading-tight">
+                        {preset.description}
+                      </span>
+                    )}
+                  </span>
+                </label>
               );
             })}
           </div>

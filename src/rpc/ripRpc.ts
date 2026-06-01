@@ -618,14 +618,21 @@ export function decodeGetCurrentCpiResponse(
 const CORMORAN_RIP_IDENTIFIER = "cormoran_rip";
 const CUSTOM_RPC_TIMEOUT_MS = 10000;
 
+// USBサスペンド/レジューム（ブラウザのタブ非アクティブ→アクティブ等）をまたぐと、
+// custom RPCのリクエスト or 応答が単発で取りこぼされ無応答になることがある。
+// 書き込み系RPCは、短いタイムアウトで数回リトライして単発取りこぼしを吸収する。
+const CUSTOM_RPC_RETRY_ATTEMPTS = 3;
+const CUSTOM_RPC_RETRY_TIMEOUT_MS = 2500;
+
 let nextCustomRequestId = 0x1000;
 function nextReqId() { return nextCustomRequestId++; }
 
 function readWithTimeout(
   channel: CustomRpcChannel,
   requestId: number,
+  timeoutMs: number = CUSTOM_RPC_TIMEOUT_MS,
 ): Promise<Uint8Array> {
-  return channel.readCustomFrame(requestId, CUSTOM_RPC_TIMEOUT_MS);
+  return channel.readCustomFrame(requestId, timeoutMs);
 }
 
 /**
@@ -725,21 +732,34 @@ export function setEncoderBinding(
   binding: EncoderBinding,
 ): Promise<boolean> {
   return queueRpc(() => channel.queueCustom(async () => {
-    const reqId = nextReqId();
-    const encoded = encodeSetEncoderBindingRequest(reqId, subsystemIndex, layerId, binding);
-    console.log(`[ripRpc] sending SetEncoderBinding reqId=${reqId} layerId=${layerId}`);
-    await channel.writeCustomFrame(encoded);
+    for (let attempt = 1; attempt <= CUSTOM_RPC_RETRY_ATTEMPTS; attempt++) {
+      // 試行ごとに新しいreqIdを使う。前の試行への遅延応答が来ても誤マッチしない。
+      const reqId = nextReqId();
+      const encoded = encodeSetEncoderBindingRequest(reqId, subsystemIndex, layerId, binding);
+      console.log(
+        `[ripRpc] sending SetEncoderBinding reqId=${reqId} layerId=${layerId}` +
+          (attempt > 1 ? ` (retry ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})` : ""),
+      );
+      await channel.writeCustomFrame(encoded);
 
-    try {
-      const frame = await readWithTimeout(channel, reqId);
-      const resp = decodeSetEncoderBindingResponse(frame);
-      if (resp && resp.requestId === reqId) {
-        console.log(`[ripRpc] SetEncoderBinding: ${resp.ok ? "success" : "error"}`);
-        return resp.ok;
+      try {
+        const frame = await readWithTimeout(channel, reqId, CUSTOM_RPC_RETRY_TIMEOUT_MS);
+        const resp = decodeSetEncoderBindingResponse(frame);
+        if (resp && resp.requestId === reqId) {
+          // デバイスが応答を返した（成功/エラーいずれも確定）。リトライしない。
+          console.log(`[ripRpc] SetEncoderBinding: ${resp.ok ? "success" : "error"}`);
+          return resp.ok;
+        }
+        console.warn(`[ripRpc] SetEncoderBinding reqId=${reqId}: unexpected response, retrying`);
+      } catch (e) {
+        // タイムアウト＝取りこぼしの可能性。次の試行で再送する。
+        console.error(
+          `[ripRpc] SetEncoderBinding reqId=${reqId} failed (attempt ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})`,
+          e,
+        );
       }
-    } catch (e) {
-      console.error(`[ripRpc] SetEncoderBinding reqId=${reqId} failed`, e);
     }
+    console.error(`[ripRpc] SetEncoderBinding gave up after ${CUSTOM_RPC_RETRY_ATTEMPTS} attempts`);
     return false;
   }));
 }
