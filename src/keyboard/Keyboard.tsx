@@ -47,38 +47,26 @@ import {
 
 type BehaviorMap = Record<number, GetBehaviorDetailsResponse>;
 
-const KEY_ONLY_BEHAVIOR_NAMES = new Set([
-  "Key Press",
-  "Mod Tap",
-  "Mod-Tap",
-  "Layer Tap",
-  "Layer-Tap",
-  "Momentary Layer",
-  "Toggle Layer",
-  "Sticky Key",
-  "Sticky Layer",
-  "Bluetooth",
-  "Wireless",
-  "Wireless Layer",
-  "Wireless Base",
-  "bt_layer",
-  "bt_base",
-  "Output Selection",
-  "Transparent",
-  "None",
-  "Studio Unlock",
-  "Bootloader",
-  "Reset",
-  "External Power",
-  "Grave/Escape",
-  "Key Repeat",
-  "Key Toggle",
-  "Caps Word",
-  "Mouse Key Press",
-]);
+// Behaviors that are encoder-only and should NOT appear in the key binding picker.
+// Uses substring match on normalized names (lowercase, non-alphanumeric → "_").
+// Everything NOT matched here is shown in the key binding picker, including custom behaviors.
+const ENCODER_ONLY_NORMALIZED_NAMES: string[] = [
+  "sensor_transparent",
+  "sensor_trans",
+  "mouse_whe",
+  "mouse_scrl",
+  "mouse_wheel",
+  "sensor_ro",
+  "re_kp",
+  "sensor_rotate",
+  "enc_key_p",
+  "inc_dec_kp",
+];
 
 function isEncoderBehavior(behavior: GetBehaviorDetailsResponse | undefined): boolean {
-  return behavior !== undefined && !KEY_ONLY_BEHAVIOR_NAMES.has(behavior.displayName);
+  if (behavior === undefined) return false;
+  const norm = normalizeBehaviorName(behavior.displayName);
+  return ENCODER_ONLY_NORMALIZED_NAMES.some((name) => norm.includes(name));
 }
 
 function bindingKey(binding: BehaviorBinding): string {
@@ -691,6 +679,10 @@ export default function Keyboard() {
     }
     return changed;
   }, [keymap, savedKeymap]);
+
+  useEffect(() => {
+    pub("keymap_unsaved_changed", changedLayers.size > 0);
+  }, [changedLayers]);
 
   const changedKeys = useMemo(() => {
     if (!keymap || !savedKeymap) return new Set<number>();

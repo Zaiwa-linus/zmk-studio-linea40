@@ -9,10 +9,15 @@ import {
   findMouseProcessorId,
   getCurrentCpi,
   getInputProcessor,
+  setCurrentCpi as rpcSetCurrentCpi,
   setTempLayerDeactivationDelay,
   setTempLayerLayer,
   type InputProcessorInfo,
 } from "./rpc/ripRpc";
+
+const DPI_MIN = 200;
+const DPI_MAX = 2000;
+const DPI_STEP = 50;
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -41,6 +46,9 @@ export function GlobalSettings() {
   const [selectedLayerId, setSelectedLayerId] = useState<number | null>(null);
   const [timeoutMs, setTimeoutMs] = useState<string>("");
 
+  const [dpiInput, setDpiInput] = useState<string>("");
+  const [dpiSave, setDpiSave] = useState<SaveState>("idle");
+
   const [layerSave, setLayerSave] = useState<SaveState>("idle");
   const [timeoutSave, setTimeoutSave] = useState<SaveState>("idle");
 
@@ -60,6 +68,8 @@ export function GlobalSettings() {
       setLoading(true);
       setAvailable(true);
       setCurrentCpi(null);
+      setDpiInput("");
+      setDpiSave("idle");
       setProcessor(null);
       setSelectedLayerId(null);
       setTimeoutMs("");
@@ -82,7 +92,11 @@ export function GlobalSettings() {
         }
 
         const cpi = await getCurrentCpi(customChannel, idx);
-        if (!cancelled) setCurrentCpi(cpi && cpi > 0 ? cpi : null);
+        const resolvedCpi = cpi && cpi > 0 ? cpi : null;
+        if (!cancelled) {
+          setCurrentCpi(resolvedCpi);
+          setDpiInput(resolvedCpi !== null ? String(resolvedCpi) : "");
+        }
 
         if (processorIdRef.current === null) {
           processorIdRef.current = await findMouseProcessorId(customChannel, idx);
@@ -147,6 +161,26 @@ export function GlobalSettings() {
       setTimeoutSave("error");
     }
   };
+
+  const onApplyDpi = async () => {
+    const idx = subsystemIndexRef.current;
+    if (!customChannel || idx === null) return;
+    const cpi = parseInt(dpiInput, 10);
+    if (!Number.isFinite(cpi) || cpi < DPI_MIN || cpi > DPI_MAX) {
+      setDpiSave("error");
+      return;
+    }
+    setDpiSave("saving");
+    const ok = await rpcSetCurrentCpi(customChannel, idx, cpi);
+    if (ok) {
+      setDpiSave("saved");
+      setCurrentCpi(cpi);
+    } else {
+      setDpiSave("error");
+    }
+  };
+
+  const dpiDirty = currentCpi !== null && dpiInput.trim() !== String(currentCpi);
 
   const timeoutDirty =
     processor != null &&
@@ -225,15 +259,73 @@ export function GlobalSettings() {
               </div>
             </section>
 
-            {/* Current DPI (read-only) */}
+            {/* DPI control */}
             <section className="rounded-lg bg-base-200 p-4">
-              <h2 className="mb-1 text-lg">現在のDPI</h2>
+              <h2 className="mb-1 text-lg">DPI</h2>
               <p className="mb-3 text-sm text-base-content/60">
-                トラックボールセンサー (PMW3610) の現在のCPI値です。確認のみ。
+                トラックボールセンサー (PMW3610) のCPI値を変更します。{DPI_MIN}〜{DPI_MAX}、{DPI_STEP}刻み。
               </p>
-              <p className="text-2xl font-semibold tabular-nums">
-                {currentCpi !== null ? `${currentCpi} DPI` : "—"}
-              </p>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <button
+                    className="h-9 w-9 rounded bg-base-100 text-lg disabled:opacity-40"
+                    disabled={
+                      dpiInput === "" ||
+                      parseInt(dpiInput, 10) <= DPI_MIN ||
+                      dpiSave === "saving"
+                    }
+                    onClick={() => {
+                      const v = parseInt(dpiInput, 10);
+                      if (Number.isFinite(v)) {
+                        setDpiInput(String(Math.max(DPI_MIN, v - DPI_STEP)));
+                        setDpiSave("idle");
+                      }
+                    }}
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={DPI_MIN}
+                    max={DPI_MAX}
+                    step={DPI_STEP}
+                    className="h-9 w-28 rounded bg-base-100 px-2 tabular-nums"
+                    value={dpiInput}
+                    onChange={(e) => {
+                      setDpiInput(e.target.value);
+                      setDpiSave("idle");
+                    }}
+                  />
+                  <button
+                    className="h-9 w-9 rounded bg-base-100 text-lg disabled:opacity-40"
+                    disabled={
+                      dpiInput === "" ||
+                      parseInt(dpiInput, 10) >= DPI_MAX ||
+                      dpiSave === "saving"
+                    }
+                    onClick={() => {
+                      const v = parseInt(dpiInput, 10);
+                      if (Number.isFinite(v)) {
+                        setDpiInput(String(Math.min(DPI_MAX, v + DPI_STEP)));
+                        setDpiSave("idle");
+                      }
+                    }}
+                  >
+                    ＋
+                  </button>
+                  <button
+                    className="h-9 rounded bg-primary px-3 text-primary-content disabled:opacity-50"
+                    disabled={!dpiDirty || dpiSave === "saving"}
+                    onClick={onApplyDpi}
+                  >
+                    適用
+                  </button>
+                  <SaveBadge state={dpiSave} />
+                </div>
+                <p className="text-xs text-base-content/50">
+                  現在: {currentCpi !== null ? `${currentCpi} DPI` : "—"}
+                </p>
+              </div>
             </section>
           </>
         )}

@@ -20,6 +20,9 @@ import { queueRpc } from "./logging";
  *   cormoran.rip.Request.get_current_cpi=20
  *   cormoran.rip.Response.get_current_cpi=21
  *   cormoran.rip.GetCurrentCpiResponse.cpi=1
+ *   cormoran.rip.Request.set_current_cpi=23
+ *   cormoran.rip.SetCurrentCpiRequest.cpi=1
+ *   cormoran.rip.Response.set_current_cpi=24
  *   cormoran.rip.Request.get_encoder_bindings=21 (empty)
  *   cormoran.rip.Request.set_encoder_binding=22
  *   cormoran.rip.Response.get_encoder_bindings=22
@@ -765,6 +768,23 @@ export function setEncoderBinding(
 }
 
 /**
+ * Encode a SetCurrentCpiRequest.
+ * cormoran.rip.Request.set_current_cpi = field 23
+ * SetCurrentCpiRequest: cpi=1
+ */
+export function encodeSetCurrentCpiRequest(
+  requestId: number,
+  subsystemIndex: number,
+  cpi: number,
+): Uint8Array {
+  const inner = fieldVarint(1, cpi);
+  const ripReq = fieldBytes(23, inner);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
+  return wrapStudioRequest(requestId, customReq);
+}
+
+/**
  * Fetch the current PMW3610 CPI value from the cormoran_rip custom subsystem.
  */
 export function getCurrentCpi(
@@ -788,6 +808,47 @@ export function getCurrentCpi(
       console.error(`[ripRpc] GetCurrentCpi reqId=${reqId} failed`, e);
     }
     return null;
+  }));
+}
+
+/**
+ * Set the PMW3610 CPI value via cormoran_rip custom RPC.
+ * Returns true on success.
+ * cormoran.rip.Response.set_current_cpi = field 24
+ */
+export function setCurrentCpi(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+  cpi: number,
+): Promise<boolean> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    for (let attempt = 1; attempt <= CUSTOM_RPC_RETRY_ATTEMPTS; attempt++) {
+      const reqId = nextReqId();
+      const encoded = encodeSetCurrentCpiRequest(reqId, subsystemIndex, cpi);
+      console.log(
+        `[ripRpc] sending SetCurrentCpi reqId=${reqId} cpi=${cpi}` +
+          (attempt > 1 ? ` (retry ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})` : ""),
+      );
+      await channel.writeCustomFrame(encoded);
+
+      try {
+        const frame = await readWithTimeout(channel, reqId, CUSTOM_RPC_RETRY_TIMEOUT_MS);
+        // cormoran.rip.Response.set_current_cpi = field 24
+        const resp = decodeRipSetResponse(frame, 24);
+        if (resp && resp.requestId === reqId) {
+          console.log(`[ripRpc] SetCurrentCpi: ${resp.ok ? "success" : "error"}`);
+          return resp.ok;
+        }
+        console.warn(`[ripRpc] SetCurrentCpi reqId=${reqId}: unexpected response, retrying`);
+      } catch (e) {
+        console.error(
+          `[ripRpc] SetCurrentCpi reqId=${reqId} failed (attempt ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})`,
+          e,
+        );
+      }
+    }
+    console.error(`[ripRpc] SetCurrentCpi gave up after ${CUSTOM_RPC_RETRY_ATTEMPTS} attempts`);
+    return false;
   }));
 }
 
