@@ -31,6 +31,13 @@ import { queueRpc } from "./logging";
  *   cormoran.rip.EncoderLayerBindings: layer_id=1, binding=2
  *   cormoran.rip.GetEncoderBindingsResponse: layers=1 (repeated EncoderLayerBindings)
  *   cormoran.rip.SetEncoderBindingRequest: layer_id=1, binding=2
+ *   cormoran.rip.Request.get_gesture_bindings=25 (empty)
+ *   cormoran.rip.Request.set_gesture_binding=26
+ *   cormoran.rip.Response.get_gesture_bindings=25
+ *   cormoran.rip.Response.set_gesture_binding=26
+ *   cormoran.rip.GestureBinding: behavior_id=1, param1=2, param2=3
+ *   cormoran.rip.GetGestureBindingsResponse: bindings=1 (repeated GestureBinding, 12 entries)
+ *   cormoran.rip.SetGestureBindingRequest: dir1=1, dir2=2, binding=3
  */
 
 import { readVarint } from "./customRpcChannel";
@@ -848,6 +855,176 @@ export function setCurrentCpi(
       }
     }
     console.error(`[ripRpc] SetCurrentCpi gave up after ${CUSTOM_RPC_RETRY_ATTEMPTS} attempts`);
+    return false;
+  }));
+}
+
+// ── Gesture bindings ──────────────────────────────────────────────────────────
+
+export const GESTURE_DIR_UP = 0;
+export const GESTURE_DIR_DOWN = 1;
+export const GESTURE_DIR_LEFT = 2;
+export const GESTURE_DIR_RIGHT = 3;
+export const GESTURE_DIR_NAMES = ["上", "下", "左", "右"] as const;
+export type GestureDir = 0 | 1 | 2 | 3;
+
+/** Returns the index (0..11) for a (dir1, dir2) pair where dir1 ≠ dir2. Returns -1 if invalid. */
+export function gestureBindingIdx(d1: GestureDir, d2: GestureDir): number {
+  if (d1 === d2 || d1 < 0 || d1 > 3 || d2 < 0 || d2 > 3) return -1;
+  return d1 * 3 + (d2 > d1 ? d2 - 1 : d2);
+}
+
+export interface GestureBinding {
+  behaviorId: number; // -1 = no binding
+  param1: number;
+  param2: number;
+}
+
+export function encodeGetGestureBindingsRequest(
+  requestId: number,
+  subsystemIndex: number,
+): Uint8Array {
+  const ripReq = fieldBytes(25, []);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
+  return wrapStudioRequest(requestId, customReq);
+}
+
+function encodeGestureBinding(binding: GestureBinding): number[] {
+  return [
+    ...fieldVarint(1, binding.behaviorId >>> 0), // treat as uint32 (behavior_id may be -1 → 0xFFFFFFFF)
+    ...fieldVarint(2, binding.param1),
+    ...fieldVarint(3, binding.param2),
+  ];
+}
+
+export function encodeSetGestureBindingRequest(
+  requestId: number,
+  subsystemIndex: number,
+  dir1: GestureDir,
+  dir2: GestureDir,
+  binding: GestureBinding,
+): Uint8Array {
+  const inner = [
+    ...fieldVarint(1, dir1),
+    ...fieldVarint(2, dir2),
+    ...fieldBytes(3, encodeGestureBinding(binding)),
+  ];
+  const ripReq = fieldBytes(26, inner);
+  const callReq = [...fieldVarint(1, subsystemIndex), ...fieldBytes(2, ripReq)];
+  const customReq = fieldBytes(2, callReq);
+  return wrapStudioRequest(requestId, customReq);
+}
+
+export function decodeGetGestureBindingsResponse(
+  frame: Uint8Array,
+): { requestId: number; bindings: GestureBinding[] } | null {
+  let requestResponseBytes: Uint8Array | null = null;
+  walkFields(frame, (f, w, v) => {
+    if (f === 1 && w === 2) requestResponseBytes = v as Uint8Array;
+  });
+  if (!requestResponseBytes) return null;
+
+  let requestId = 0;
+  let customBytes: Uint8Array | null = null;
+  walkFields(requestResponseBytes, (f, w, v) => {
+    if (f === 1 && w === 0) requestId = v as number;
+    if (f === 100 && w === 2) customBytes = v as Uint8Array;
+  });
+  if (!customBytes) return null;
+
+  let callResponseBytes: Uint8Array | null = null;
+  walkFields(customBytes, (f, w, v) => {
+    if (f === 2 && w === 2) callResponseBytes = v as Uint8Array;
+  });
+  if (!callResponseBytes) return null;
+
+  let ripPayload: Uint8Array | null = null;
+  walkFields(callResponseBytes, (f, w, v) => {
+    if (f === 2 && w === 2) ripPayload = v as Uint8Array;
+  });
+  if (!ripPayload) return null;
+
+  // cormoran.rip.Response.get_gesture_bindings = field 25
+  let getRespBytes: Uint8Array | null = null;
+  walkFields(ripPayload, (f, w, v) => {
+    if (f === 25 && w === 2) getRespBytes = v as Uint8Array;
+  });
+  if (!getRespBytes) return null;
+
+  const bindings: GestureBinding[] = [];
+  walkFields(getRespBytes, (f, w, v) => {
+    if (f !== 1 || w !== 2) return;
+    let behaviorId = -1, param1 = 0, param2 = 0;
+    walkFields(v as Uint8Array, (sf, sw, sv) => {
+      if (sf === 1 && sw === 0) behaviorId = sv as number;
+      if (sf === 2 && sw === 0) param1 = sv as number;
+      if (sf === 3 && sw === 0) param2 = sv as number;
+    });
+    bindings.push({ behaviorId, param1, param2 });
+  });
+
+  return { requestId, bindings };
+}
+
+export function getGestureBindings(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+): Promise<GestureBinding[] | null> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    const reqId = nextReqId();
+    const encoded = encodeGetGestureBindingsRequest(reqId, subsystemIndex);
+    console.log(`[ripRpc] sending GetGestureBindings reqId=${reqId}`);
+    await channel.writeCustomFrame(encoded);
+
+    try {
+      const frame = await readWithTimeout(channel, reqId);
+      const resp = decodeGetGestureBindingsResponse(frame);
+      if (resp && resp.requestId === reqId) {
+        console.log(`[ripRpc] GetGestureBindings: ${resp.bindings.length} bindings`);
+        return resp.bindings;
+      }
+    } catch (e) {
+      console.error(`[ripRpc] GetGestureBindings reqId=${reqId} failed`, e);
+    }
+    return null;
+  }));
+}
+
+export function setGestureBinding(
+  channel: CustomRpcChannel,
+  subsystemIndex: number,
+  dir1: GestureDir,
+  dir2: GestureDir,
+  binding: GestureBinding,
+): Promise<boolean> {
+  return queueRpc(() => channel.queueCustom(async () => {
+    for (let attempt = 1; attempt <= CUSTOM_RPC_RETRY_ATTEMPTS; attempt++) {
+      const reqId = nextReqId();
+      const encoded = encodeSetGestureBindingRequest(reqId, subsystemIndex, dir1, dir2, binding);
+      console.log(
+        `[ripRpc] sending SetGestureBinding reqId=${reqId} dir1=${dir1} dir2=${dir2}` +
+          (attempt > 1 ? ` (retry ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})` : ""),
+      );
+      await channel.writeCustomFrame(encoded);
+
+      try {
+        const frame = await readWithTimeout(channel, reqId, CUSTOM_RPC_RETRY_TIMEOUT_MS);
+        // cormoran.rip.Response.set_gesture_binding = field 26
+        const resp = decodeRipSetResponse(frame, 26);
+        if (resp && resp.requestId === reqId) {
+          console.log(`[ripRpc] SetGestureBinding: ${resp.ok ? "success" : "error"}`);
+          return resp.ok;
+        }
+        console.warn(`[ripRpc] SetGestureBinding reqId=${reqId}: unexpected response, retrying`);
+      } catch (e) {
+        console.error(
+          `[ripRpc] SetGestureBinding reqId=${reqId} failed (attempt ${attempt}/${CUSTOM_RPC_RETRY_ATTEMPTS})`,
+          e,
+        );
+      }
+    }
+    console.error(`[ripRpc] SetGestureBinding gave up after ${CUSTOM_RPC_RETRY_ATTEMPTS} attempts`);
     return false;
   }));
 }

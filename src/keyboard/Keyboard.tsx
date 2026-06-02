@@ -28,6 +28,7 @@ import { GlobalSettings } from "../GlobalSettings";
 import { Keymap as KeymapComp } from "./Keymap";
 import { EncoderBindingPicker, EncoderKey } from "./EncoderBindings";
 import type { EncoderPreset } from "./EncoderBindings";
+import { GestureBindings } from "./GestureBindings";
 import { useConnectedDeviceData } from "../rpc/useConnectedDeviceData";
 import { ConnectionContext } from "../rpc/ConnectionContext";
 import { CustomRpcContext } from "../rpc/CustomRpcContext";
@@ -346,6 +347,7 @@ export default function Keyboard() {
   >(undefined);
   const [selectedEncoder, setSelectedEncoder] = useState(false);
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  const [showGestureBindings, setShowGestureBindings] = useState(false);
   const behaviors = useBehaviors();
 
   const conn = useContext(ConnectionContext);
@@ -395,10 +397,12 @@ export default function Keyboard() {
     setSelectedKeyPosition(undefined);
     setSelectedEncoder(false);
     setShowGlobalSettings(false);
+    setShowGestureBindings(false);
   }, [conn]);
 
   const selectLayer = useCallback((i: number) => {
     setShowGlobalSettings(false);
+    setShowGestureBindings(false);
     setSelectedLayerIndex(i);
   }, []);
 
@@ -883,12 +887,13 @@ export default function Keyboard() {
   }, [keymap, selectedLayerIndex]);
 
   const showPicker = (selectedBinding != null) || (selectedEncoder && encoderBindingPresets.length > 0);
+  const showFullscreen = showGlobalSettings || showGestureBindings;
 
   return (
     <div
       className="grid grid-cols-[auto_1fr] bg-base-300 max-w-full min-w-0 min-h-0 h-full"
       style={{
-        gridTemplateRows: showGlobalSettings
+        gridTemplateRows: showFullscreen
           ? "1fr 0"
           : showPicker
           ? "3fr 2fr"
@@ -916,12 +921,33 @@ export default function Keyboard() {
             }`}
             onClick={() => {
               setShowGlobalSettings(true);
+              setShowGestureBindings(false);
               setSelectedKeyPosition(undefined);
               setSelectedEncoder(false);
             }}
           >
             <SlidersHorizontal className="size-4" />
             Global Settings
+          </button>
+        )}
+
+        {keymap && (
+          <button
+            type="button"
+            className={`flex items-center gap-1.5 rounded p-1 text-sm transition-colors ${
+              showGestureBindings
+                ? "bg-primary text-primary-content"
+                : "hover:bg-base-300"
+            }`}
+            onClick={() => {
+              setShowGestureBindings(true);
+              setShowGlobalSettings(false);
+              setSelectedKeyPosition(undefined);
+              setSelectedEncoder(false);
+            }}
+          >
+            <span className="size-4 text-center leading-none">✧</span>
+            Gesture
           </button>
         )}
 
@@ -945,6 +971,10 @@ export default function Keyboard() {
       {showGlobalSettings ? (
         <div className="col-start-2 row-start-1 row-span-2 overflow-hidden">
           <GlobalSettings />
+        </div>
+      ) : showGestureBindings ? (
+        <div className="col-start-2 row-start-1 row-span-2 overflow-hidden">
+          <GestureBindings behaviors={behaviors} />
         </div>
       ) : (
       <>
