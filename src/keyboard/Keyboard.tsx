@@ -620,26 +620,7 @@ export default function Keyboard() {
     if (!ok) {
       console.error("Failed to set encoder binding", updated);
       setEncoderLayerBindings(previousBindings);
-      return;
     }
-
-    const actualBindings = await getEncoderBindings(customChannel, idx);
-    const actual = actualBindings?.find((entry) => entry.layerId === layerId);
-    if (
-      !actual ||
-      actual.binding.behaviorId !== updated.binding.behaviorId ||
-      actual.binding.param1 !== updated.binding.param1 ||
-      actual.binding.param2 !== updated.binding.param2
-    ) {
-      console.error("Encoder binding did not persist after SetEncoderBinding", {
-        expected: updated,
-        actual,
-      });
-      setEncoderLayerBindings(previousBindings);
-      return;
-    }
-
-    setEncoderLayerBindings(actualBindings);
   }, [customChannel, keymap, selectedLayerIndex]);
 
   let selectedBinding = useMemo(() => {

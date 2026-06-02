@@ -179,6 +179,8 @@ function App() {
   useSub("encoder_unsaved_changed", (v: boolean) => setEncoderUnsaved(v));
   const [keymapUnsaved, setKeymapUnsaved] = useState(false);
   useSub("keymap_unsaved_changed", (v: boolean) => setKeymapUnsaved(v));
+  const [globalSettingsUnsaved, setGlobalSettingsUnsaved] = useState(false);
+  useSub("global_settings_unsaved_changed", (v: boolean) => setGlobalSettingsUnsaved(v));
   const [showLicenseNotice, setShowLicenseNotice] = useState(false);
   const [connectionAbort, setConnectionAbort] = useState(new AbortController());
 
@@ -346,7 +348,7 @@ function App() {
               onDiscard={discard}
               onDisconnect={disconnect}
               onResetSettings={resetSettings}
-              extraUnsaved={encoderUnsaved || keymapUnsaved}
+              extraUnsaved={encoderUnsaved || keymapUnsaved || globalSettingsUnsaved}
             />
             <Keyboard />
             <AppFooter

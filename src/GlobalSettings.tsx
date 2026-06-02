@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { CustomRpcContext } from "./rpc/CustomRpcContext";
 import { LockStateContext } from "./rpc/LockStateContext";
 import { LockState } from "@zmkfirmware/zmk-studio-ts-client/core";
@@ -14,52 +14,43 @@ import {
   setTempLayerLayer,
   type InputProcessorInfo,
 } from "./rpc/ripRpc";
+import { usePub, useSub } from "./usePubSub";
 
 const DPI_MIN = 200;
 const DPI_MAX = 2000;
 const DPI_STEP = 50;
 
-type SaveState = "idle" | "saving" | "saved" | "error";
-
-function SaveBadge({ state }: { state: SaveState }) {
-  if (state === "saving")
-    return <span className="text-xs text-base-content/60">保存中…</span>;
-  if (state === "saved")
-    return <span className="text-xs text-success">保存しました</span>;
-  if (state === "error")
-    return <span className="text-xs text-error">失敗しました</span>;
-  return null;
-}
-
 export function GlobalSettings() {
   const customChannel = useContext(CustomRpcContext);
   const lockState = useContext(LockStateContext);
+  const pub = usePub();
 
   const subsystemIndexRef = useRef<number | null>(null);
   const processorIdRef = useRef<number | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [available, setAvailable] = useState(true);
+
+  // live FW values (updated after successful RPC)
   const [currentCpi, setCurrentCpi] = useState<number | null>(null);
   const [processor, setProcessor] = useState<InputProcessorInfo | null>(null);
-
   const [selectedLayerId, setSelectedLayerId] = useState<number | null>(null);
+
+  // text input state
+  const [dpiInput, setDpiInput] = useState<string>("");
   const [timeoutMs, setTimeoutMs] = useState<string>("");
 
-  const [dpiInput, setDpiInput] = useState<string>("");
-  const [dpiSave, setDpiSave] = useState<SaveState>("idle");
+  // Flash snapshot: values at connect or last Save — used for Discard
+  // DPI is excluded: NVS 未実装のため Save/Discard 対象外
+  const [savedLayerId, setSavedLayerId] = useState<number | null>(null);
+  const [savedTimeoutMs, setSavedTimeoutMs] = useState<number | null>(null);
 
-  const [layerSave, setLayerSave] = useState<SaveState>("idle");
-  const [timeoutSave, setTimeoutSave] = useState<SaveState>("idle");
-
-  // Layer list (id + name) from the standard keymap RPC.
   const [keymap] = useConnectedDeviceData<Keymap>(
     { keymap: { getKeymap: true } },
     (r) => r?.keymap?.getKeymap,
     true
   );
 
-  // Fetch auto-mouse processor settings + current CPI once on connect/unlock.
   useEffect(() => {
     if (
       !customChannel ||
@@ -69,10 +60,11 @@ export function GlobalSettings() {
       setAvailable(true);
       setCurrentCpi(null);
       setDpiInput("");
-      setDpiSave("idle");
       setProcessor(null);
       setSelectedLayerId(null);
       setTimeoutMs("");
+      setSavedLayerId(null);
+      setSavedTimeoutMs(null);
       subsystemIndexRef.current = null;
       processorIdRef.current = null;
       return;
@@ -93,10 +85,6 @@ export function GlobalSettings() {
 
         const cpi = await getCurrentCpi(customChannel, idx);
         const resolvedCpi = cpi && cpi > 0 ? cpi : null;
-        if (!cancelled) {
-          setCurrentCpi(resolvedCpi);
-          setDpiInput(resolvedCpi !== null ? String(resolvedCpi) : "");
-        }
 
         if (processorIdRef.current === null) {
           processorIdRef.current = await findMouseProcessorId(customChannel, idx);
@@ -108,10 +96,17 @@ export function GlobalSettings() {
         }
 
         const info = await getInputProcessor(customChannel, idx, pid);
-        if (!cancelled && info) {
-          setProcessor(info);
-          setSelectedLayerId(info.tempLayerLayer);
-          setTimeoutMs(String(info.tempLayerDeactivationDelayMs));
+        if (!cancelled) {
+          setCurrentCpi(resolvedCpi);
+          setDpiInput(resolvedCpi !== null ? String(resolvedCpi) : "");
+          if (info) {
+            setProcessor(info);
+            setSelectedLayerId(info.tempLayerLayer);
+            setTimeoutMs(String(info.tempLayerDeactivationDelayMs));
+            // Flash snapshot on connect
+            setSavedLayerId(info.tempLayerLayer);
+            setSavedTimeoutMs(info.tempLayerDeactivationDelayMs);
+          }
         }
       } catch (e) {
         console.error("Failed to load global settings", e);
@@ -121,10 +116,77 @@ export function GlobalSettings() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [customChannel, lockState]);
+
+  // Unsaved = AML live values differ from Flash snapshot (DPI excluded)
+  const isUnsaved = useMemo(() => {
+    if (selectedLayerId !== null && savedLayerId !== null && selectedLayerId !== savedLayerId) return true;
+    if (processor !== null && savedTimeoutMs !== null && processor.tempLayerDeactivationDelayMs !== savedTimeoutMs) return true;
+    return false;
+  }, [selectedLayerId, savedLayerId, processor, savedTimeoutMs]);
+
+  useEffect(() => {
+    pub("global_settings_unsaved_changed", isUnsaved);
+  }, [isUnsaved]);
+
+  // Save: update Flash snapshot to current live values
+  useSub("keymap_saved", () => {
+    setSavedLayerId(selectedLayerId);
+    if (processor !== null) setSavedTimeoutMs(processor.tempLayerDeactivationDelayMs);
+  });
+
+  // Discard: revert AML to Flash snapshot (DPI excluded)
+  useSub("keymap_discarded", () => {
+    const idx = subsystemIndexRef.current;
+    const pid = processorIdRef.current;
+    if (!customChannel || idx === null || pid === null) return;
+
+    if (savedLayerId !== null && selectedLayerId !== savedLayerId) {
+      setTempLayerLayer(customChannel, idx, pid, savedLayerId)
+        .then((ok) => {
+          if (ok) {
+            setSelectedLayerId(savedLayerId);
+            setProcessor((p) => (p ? { ...p, tempLayerLayer: savedLayerId } : p));
+          }
+        })
+        .catch((e) => console.error("Failed to revert AML layer", e));
+    }
+
+    if (
+      savedTimeoutMs !== null &&
+      processor !== null &&
+      processor.tempLayerDeactivationDelayMs !== savedTimeoutMs
+    ) {
+      setTempLayerDeactivationDelay(customChannel, idx, pid, savedTimeoutMs)
+        .then((ok) => {
+          if (ok) {
+            setTimeoutMs(String(savedTimeoutMs));
+            setProcessor((p) =>
+              p ? { ...p, tempLayerDeactivationDelayMs: savedTimeoutMs } : p
+            );
+          }
+        })
+        .catch((e) => console.error("Failed to revert AML timeout", e));
+    }
+  });
+
+  // DPI +/- : UI プレビューのみ（RPC なし）
+  const onDpiStep = (delta: number) => {
+    const base = parseInt(dpiInput, 10);
+    if (!Number.isFinite(base)) return;
+    const newCpi = Math.max(DPI_MIN, Math.min(DPI_MAX, base + delta));
+    setDpiInput(String(newCpi));
+  };
+
+  const onApplyDpi = async () => {
+    const idx = subsystemIndexRef.current;
+    if (!customChannel || idx === null) return;
+    const cpi = parseInt(dpiInput, 10);
+    if (!Number.isFinite(cpi) || cpi < DPI_MIN || cpi > DPI_MAX) return;
+    const ok = await rpcSetCurrentCpi(customChannel, idx, cpi);
+    if (ok) setCurrentCpi(cpi);
+  };
 
   const onSelectLayer = async (layerId: number) => {
     const idx = subsystemIndexRef.current;
@@ -132,14 +194,11 @@ export function GlobalSettings() {
     if (!customChannel || idx === null || pid === null) return;
     const previous = selectedLayerId;
     setSelectedLayerId(layerId);
-    setLayerSave("saving");
     const ok = await setTempLayerLayer(customChannel, idx, pid, layerId);
-    if (ok) {
-      setLayerSave("saved");
-      setProcessor((p) => (p ? { ...p, tempLayerLayer: layerId } : p));
-    } else {
-      setLayerSave("error");
+    if (!ok) {
       setSelectedLayerId(previous);
+    } else {
+      setProcessor((p) => (p ? { ...p, tempLayerLayer: layerId } : p));
     }
   };
 
@@ -148,43 +207,23 @@ export function GlobalSettings() {
     const pid = processorIdRef.current;
     if (!customChannel || idx === null || pid === null) return;
     const ms = parseInt(timeoutMs, 10);
-    if (!Number.isFinite(ms) || ms < 0) {
-      setTimeoutSave("error");
-      return;
-    }
-    setTimeoutSave("saving");
+    if (!Number.isFinite(ms) || ms < 0) return;
     const ok = await setTempLayerDeactivationDelay(customChannel, idx, pid, ms);
-    if (ok) {
-      setTimeoutSave("saved");
-      setProcessor((p) => (p ? { ...p, tempLayerDeactivationDelayMs: ms } : p));
-    } else {
-      setTimeoutSave("error");
-    }
+    if (ok) setProcessor((p) => (p ? { ...p, tempLayerDeactivationDelayMs: ms } : p));
   };
 
-  const onApplyDpi = async () => {
-    const idx = subsystemIndexRef.current;
-    if (!customChannel || idx === null) return;
-    const cpi = parseInt(dpiInput, 10);
-    if (!Number.isFinite(cpi) || cpi < DPI_MIN || cpi > DPI_MAX) {
-      setDpiSave("error");
-      return;
-    }
-    setDpiSave("saving");
-    const ok = await rpcSetCurrentCpi(customChannel, idx, cpi);
-    if (ok) {
-      setDpiSave("saved");
-      setCurrentCpi(cpi);
-    } else {
-      setDpiSave("error");
-    }
-  };
+  const parsedDpiInput = parseInt(dpiInput, 10);
+  const dpiApplicable =
+    Number.isFinite(parsedDpiInput) &&
+    parsedDpiInput >= DPI_MIN &&
+    parsedDpiInput <= DPI_MAX &&
+    parsedDpiInput !== currentCpi;
 
-  const dpiDirty = currentCpi !== null && dpiInput.trim() !== String(currentCpi);
-
-  const timeoutDirty =
-    processor != null &&
-    timeoutMs.trim() !== String(processor.tempLayerDeactivationDelayMs);
+  const parsedTimeout = parseInt(timeoutMs, 10);
+  const timeoutApplicable =
+    Number.isFinite(parsedTimeout) &&
+    parsedTimeout >= 0 &&
+    parsedTimeout !== processor?.tempLayerDeactivationDelayMs;
 
   return (
     <div className="bg-base-300 h-full overflow-y-auto p-4">
@@ -225,13 +264,10 @@ export function GlobalSettings() {
                     </option>
                   ))}
                 </select>
-                <SaveBadge state={layerSave} />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium">
-                  タイムアウト (ms)
-                </label>
+                <label className="text-sm font-medium">タイムアウト (ms)</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
@@ -239,19 +275,15 @@ export function GlobalSettings() {
                     step={50}
                     className="h-9 w-32 rounded bg-base-100 px-2 tabular-nums"
                     value={timeoutMs}
-                    onChange={(e) => {
-                      setTimeoutMs(e.target.value);
-                      setTimeoutSave("idle");
-                    }}
+                    onChange={(e) => setTimeoutMs(e.target.value)}
                   />
                   <button
                     className="h-9 rounded bg-primary px-3 text-primary-content disabled:opacity-50"
-                    disabled={!timeoutDirty || timeoutSave === "saving"}
+                    disabled={!timeoutApplicable}
                     onClick={onApplyTimeout}
                   >
                     適用
                   </button>
-                  <SaveBadge state={timeoutSave} />
                 </div>
                 <p className="text-xs text-base-content/50">
                   操作停止からこの時間が経過するとレイヤが解除されます。
@@ -259,7 +291,7 @@ export function GlobalSettings() {
               </div>
             </section>
 
-            {/* DPI control */}
+            {/* DPI — immediate RAM only, no Save/Discard */}
             <section className="rounded-lg bg-base-200 p-4">
               <h2 className="mb-1 text-lg">DPI</h2>
               <p className="mb-3 text-sm text-base-content/60">
@@ -269,18 +301,8 @@ export function GlobalSettings() {
                 <div className="flex items-center gap-2">
                   <button
                     className="h-9 w-9 rounded bg-base-100 text-lg disabled:opacity-40"
-                    disabled={
-                      dpiInput === "" ||
-                      parseInt(dpiInput, 10) <= DPI_MIN ||
-                      dpiSave === "saving"
-                    }
-                    onClick={() => {
-                      const v = parseInt(dpiInput, 10);
-                      if (Number.isFinite(v)) {
-                        setDpiInput(String(Math.max(DPI_MIN, v - DPI_STEP)));
-                        setDpiSave("idle");
-                      }
-                    }}
+                    disabled={dpiInput === "" || parseInt(dpiInput, 10) <= DPI_MIN}
+                    onClick={() => onDpiStep(-DPI_STEP)}
                   >
                     −
                   </button>
@@ -291,36 +313,22 @@ export function GlobalSettings() {
                     step={DPI_STEP}
                     className="h-9 w-28 rounded bg-base-100 px-2 tabular-nums"
                     value={dpiInput}
-                    onChange={(e) => {
-                      setDpiInput(e.target.value);
-                      setDpiSave("idle");
-                    }}
+                    onChange={(e) => setDpiInput(e.target.value)}
                   />
                   <button
                     className="h-9 w-9 rounded bg-base-100 text-lg disabled:opacity-40"
-                    disabled={
-                      dpiInput === "" ||
-                      parseInt(dpiInput, 10) >= DPI_MAX ||
-                      dpiSave === "saving"
-                    }
-                    onClick={() => {
-                      const v = parseInt(dpiInput, 10);
-                      if (Number.isFinite(v)) {
-                        setDpiInput(String(Math.min(DPI_MAX, v + DPI_STEP)));
-                        setDpiSave("idle");
-                      }
-                    }}
+                    disabled={dpiInput === "" || parseInt(dpiInput, 10) >= DPI_MAX}
+                    onClick={() => onDpiStep(DPI_STEP)}
                   >
                     ＋
                   </button>
                   <button
                     className="h-9 rounded bg-primary px-3 text-primary-content disabled:opacity-50"
-                    disabled={!dpiDirty || dpiSave === "saving"}
+                    disabled={!dpiApplicable}
                     onClick={onApplyDpi}
                   >
                     適用
                   </button>
-                  <SaveBadge state={dpiSave} />
                 </div>
                 <p className="text-xs text-base-content/50">
                   現在: {currentCpi !== null ? `${currentCpi} DPI` : "—"}
