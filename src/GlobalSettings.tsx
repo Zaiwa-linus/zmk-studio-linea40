@@ -17,8 +17,16 @@ import {
 import { usePub, useSub } from "./usePubSub";
 
 const DPI_MIN = 200;
-const DPI_MAX = 2000;
-const DPI_STEP = 50;
+const DPI_MAX = 4000;
+const DPI_STEP = 200;
+
+function normalizeDpi(cpi: number): number {
+  const clamped = Math.max(DPI_MIN, Math.min(DPI_MAX, cpi));
+  return Math.max(
+    DPI_MIN,
+    Math.min(DPI_MAX, Math.round(clamped / DPI_STEP) * DPI_STEP)
+  );
+}
 
 export function GlobalSettings() {
   const customChannel = useContext(CustomRpcContext);
@@ -40,8 +48,8 @@ export function GlobalSettings() {
   const [dpiInput, setDpiInput] = useState<string>("");
   const [timeoutMs, setTimeoutMs] = useState<string>("");
 
-  // Flash snapshot: values at connect or last Save — used for Discard
-  // DPI is excluded: NVS 未実装のため Save/Discard 対象外
+  // Flash snapshot: values at connect or last Save — used for Discard.
+  // DPI is excluded because it is applied and persisted immediately.
   const [savedLayerId, setSavedLayerId] = useState<number | null>(null);
   const [savedTimeoutMs, setSavedTimeoutMs] = useState<number | null>(null);
 
@@ -171,21 +179,25 @@ export function GlobalSettings() {
     }
   });
 
-  // DPI +/- : UI プレビューのみ（RPC なし）
+  // DPI +/- : UI preview only. Apply sends the persistent RPC.
   const onDpiStep = (delta: number) => {
     const base = parseInt(dpiInput, 10);
     if (!Number.isFinite(base)) return;
-    const newCpi = Math.max(DPI_MIN, Math.min(DPI_MAX, base + delta));
+    const newCpi = normalizeDpi(base + delta);
     setDpiInput(String(newCpi));
   };
 
   const onApplyDpi = async () => {
     const idx = subsystemIndexRef.current;
     if (!customChannel || idx === null) return;
-    const cpi = parseInt(dpiInput, 10);
-    if (!Number.isFinite(cpi) || cpi < DPI_MIN || cpi > DPI_MAX) return;
+    const parsed = parseInt(dpiInput, 10);
+    if (!Number.isFinite(parsed) || parsed < DPI_MIN || parsed > DPI_MAX) return;
+    const cpi = normalizeDpi(parsed);
     const ok = await rpcSetCurrentCpi(customChannel, idx, cpi);
-    if (ok) setCurrentCpi(cpi);
+    if (ok) {
+      setCurrentCpi(cpi);
+      setDpiInput(String(cpi));
+    }
   };
 
   const onSelectLayer = async (layerId: number) => {
@@ -217,7 +229,7 @@ export function GlobalSettings() {
     Number.isFinite(parsedDpiInput) &&
     parsedDpiInput >= DPI_MIN &&
     parsedDpiInput <= DPI_MAX &&
-    parsedDpiInput !== currentCpi;
+    normalizeDpi(parsedDpiInput) !== currentCpi;
 
   const parsedTimeout = parseInt(timeoutMs, 10);
   const timeoutApplicable =
@@ -291,7 +303,7 @@ export function GlobalSettings() {
               </div>
             </section>
 
-            {/* DPI — immediate RAM only, no Save/Discard */}
+            {/* DPI — immediate persistent apply, no Save/Discard */}
             <section className="rounded-lg bg-base-200 p-4">
               <h2 className="mb-1 text-lg">DPI</h2>
               <p className="mb-3 text-sm text-base-content/60">
