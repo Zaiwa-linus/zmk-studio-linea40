@@ -92,6 +92,12 @@ const KB_SECTIONS: KeySection[] = [
     ids: [0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7],
   },
   {
+    label: "Language",
+    page: 7,
+    ids: [144, 145, 146, 147, 148],
+    // LANG1(かな) LANG2(英数) LANG3 LANG4 LANG5
+  },
+  {
     label: "Media",
     page: 12,
     ids: [181, 182, 183, 180, 179, 205, 226, 233, 234, 184],
